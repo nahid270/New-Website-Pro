@@ -2,6 +2,7 @@ import os
 import requests
 import tempfile
 import datetime
+import re
 from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 from pymongo import MongoClient
 from bson.objectid import ObjectId
@@ -35,7 +36,7 @@ ADMIN_PASS = os.environ.get("ADMIN_PASS", "12345")
 CSS = """
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
-    :root { --main: #e50914; --bg: #0f0f0f; --card: #181818; --text: #fff; --gray: #aaa; --dark-gray: #222; }
+    :root { --main: #e50914; --bg: #0f0f0f; --card: #181818; --text: #fff; --gray: #aaa; }
     * { box-sizing: border-box; margin: 0; padding: 0; outline: none; -webkit-tap-highlight-color: transparent; }
     body { font-family: Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); padding-bottom: 30px; }
     a { text-decoration: none; color: inherit; }
@@ -45,7 +46,7 @@ CSS = """
     .logo { color: var(--main); font-size: 20px; font-weight: 800; letter-spacing: -1px; }
     .btn { background: var(--main); color: white; border: none; padding: 8px 16px; border-radius: 20px; cursor: pointer; font-weight: 600; font-size: 13px; display: inline-block; }
     
-    /* Home Layout */
+    /* Layout */
     .container { max-width: 1000px; margin: auto; padding: 15px; }
     .search-box { margin: 10px 0 20px; display: flex; justify-content: center; }
     .search-input { width: 100%; max-width: 500px; padding: 10px 20px; border-radius: 50px; border: 1px solid #333; background: #121212; color: white; font-size: 16px; }
@@ -61,7 +62,7 @@ CSS = """
     .card-title { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
     .card-meta { font-size: 12px; color: var(--gray); }
 
-    /* --- WATCH PAGE STYLES --- */
+    /* Watch Page */
     .watch-video-container { width: 100%; position: sticky; top: 0; z-index: 900; background: #000; }
     .video-info { padding: 15px; border-bottom: 1px solid #333; }
     .video-title { font-size: 18px; font-weight: bold; margin-bottom: 8px; line-height: 1.3; }
@@ -84,15 +85,18 @@ CSS = """
     .admin-box { background: #1a1a1a; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #333; }
     input[type="text"], select, input[type="file"] { width: 100%; padding: 12px; margin: 8px 0; border-radius: 5px; border: 1px solid #444; background: #222; color: white; }
     
-    /* Plyr Override */
+    .or-divider { text-align: center; margin: 15px 0; position: relative; }
+    .or-divider span { background: #1a1a1a; padding: 0 10px; color: #777; font-size: 12px; position: relative; z-index: 1; }
+    .or-divider::before { content: ''; position: absolute; top: 50%; left: 0; width: 100%; height: 1px; background: #333; z-index: 0; }
+
+    /* Plyr */
     .plyr { width: 100%; aspect-ratio: 16/9; }
 </style>
-<!-- Plyr Player -->
 <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
 <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
 """
 
-# --- পাবলিক হোমপেজ (HOME_HTML) ---
+# --- হোমপেজ ---
 HOME_HTML = CSS + """
 <nav class="navbar">
     <a href="/" class="logo">PLAYBOX</a>
@@ -112,7 +116,6 @@ HOME_HTML = CSS + """
         {% endif %}
 
         {% for m in movies %}
-        <!-- লিঙ্কে ক্লিক করলে নতুন পেজে যাবে -->
         <a href="/watch/{{ m._id }}" class="card">
             <img src="{{ m.poster }}" loading="lazy" onerror="this.src='https://via.placeholder.com/300x450?text=No+Poster'">
             <div class="card-info">
@@ -125,14 +128,13 @@ HOME_HTML = CSS + """
 </div>
 """
 
-# --- ওয়াচ পেজ (WATCH_HTML) - ইউটিউব স্টাইল ---
+# --- ওয়াচ পেজ ---
 WATCH_HTML = CSS + """
 <nav class="navbar">
     <a href="/" class="logo">PLAYBOX</a>
     <a href="/" class="btn" style="background:#333;">BACK</a>
 </nav>
 
-<!-- ভিডিও প্লেয়ার সেকশন -->
 <div class="watch-video-container">
     <video id="player" playsinline controls autoplay>
         <source src="{{ movie.video_url }}" type="video/mp4" />
@@ -140,7 +142,6 @@ WATCH_HTML = CSS + """
 </div>
 
 <div class="container" style="padding-top:0;">
-    <!-- ইনফো সেকশন -->
     <div class="video-info">
         <div class="video-title">{{ movie.title }}</div>
         <div class="video-meta">
@@ -148,7 +149,6 @@ WATCH_HTML = CSS + """
             <span id="likeCount">{{ movie.likes|default(0) }} Likes</span>
         </div>
         
-        <!-- লাইক বাটন -->
         <div class="action-bar">
             <button class="action-btn" onclick="toggleLike('{{ movie._id }}')">
                 <span>👍</span> Like
@@ -159,10 +159,8 @@ WATCH_HTML = CSS + """
         </div>
     </div>
 
-    <!-- কমেন্ট সেকশন -->
     <div class="comments-section">
         <h4 style="margin-bottom:15px;">Comments</h4>
-        
         <form action="/add_comment/{{ movie._id }}" method="POST" class="comment-form">
             <input type="text" name="text" class="comment-input" placeholder="Add a comment..." required autocomplete="off">
             <button class="btn" style="border-radius:50%; width:35px; height:35px; padding:0;">➤</button>
@@ -178,21 +176,19 @@ WATCH_HTML = CSS + """
                 </div>
             </div>
             {% else %}
-            <p style="color:#555; font-size:12px;">No comments yet. Be the first!</p>
+            <p style="color:#555; font-size:12px;">No comments yet.</p>
             {% endfor %}
         </div>
     </div>
 </div>
 
 <script>
-    // প্লেয়ার চালু
     document.addEventListener('DOMContentLoaded', () => {
         const player = new Plyr('#player', {
             controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'fullscreen'],
         });
     });
 
-    // লাইক ফাংশন (AJAX)
     function toggleLike(id) {
         fetch(`/like/${id}`, { method: 'POST' })
             .then(res => res.json())
@@ -204,7 +200,7 @@ WATCH_HTML = CSS + """
 </script>
 """
 
-# --- এডমিন প্যানেল (ADMIN_HTML) ---
+# --- এডমিন প্যানেল (আপডেটেড) ---
 ADMIN_HTML = CSS + """
 <nav class="navbar">
     <a href="/" class="logo">ADMIN</a>
@@ -234,14 +230,23 @@ ADMIN_HTML = CSS + """
             </div>
             <input type="text" id="fPoster" name="poster" placeholder="Poster Link" required>
             <input type="text" id="fBack" name="backdrop" placeholder="Backdrop Link">
-            <input type="file" id="fVideo" name="video_file" accept="video/mp4" required style="padding:8px;">
+
+            <!-- OPTION 1: LINK PASTE -->
+            <label style="color:var(--main); font-weight:bold; margin-top:10px; display:block;">Option A: Paste Link (Google Drive / Direct URL)</label>
+            <input type="text" id="fLink" name="video_link" placeholder="Paste link here...">
+
+            <div class="or-divider"><span>OR</span></div>
+
+            <!-- OPTION 2: UPLOAD FILE -->
+            <label style="color:var(--main); font-weight:bold; display:block;">Option B: Upload File</label>
+            <input type="file" id="fVideo" name="video_file" accept="video/mp4" style="padding:8px;">
             
             <div style="background:#333; height:5px; margin:15px 0; border-radius:5px; overflow:hidden;">
                 <div id="pBar" style="background:var(--main); width:0%; height:100%;"></div>
             </div>
-            <p id="statusMsg" style="text-align:center; color:var(--main); display:none; margin-bottom:10px;">Uploading... Please wait.</p>
+            <p id="statusMsg" style="text-align:center; color:var(--main); display:none; margin-bottom:10px;">Processing... Please wait.</p>
             
-            <button type="button" onclick="startUpload()" class="btn" style="width:100%;">UPLOAD</button>
+            <button type="button" onclick="startUpload()" class="btn" style="width:100%;">PUBLISH CONTENT</button>
         </form>
     </div>
 
@@ -283,14 +288,33 @@ ADMIN_HTML = CSS + """
     }
 
     function startUpload() {
-        const formData = new FormData(document.getElementById('uploadForm'));
+        const form = document.getElementById('uploadForm');
+        
+        // ভ্যালিডেশন: হয় লিঙ্ক থাকতে হবে, না হয় ফাইল থাকতে হবে
+        const file = document.getElementById('fVideo').files[0];
+        const link = document.getElementById('fLink').value;
+        if(!file && !link) {
+            alert("Please Select a File OR Paste a Link!");
+            return;
+        }
+
+        const formData = new FormData(form);
         const xhr = new XMLHttpRequest();
         document.getElementById('statusMsg').style.display = 'block';
+        
         xhr.upload.onprogress = (e) => {
-            const p = Math.round((e.loaded / e.total) * 100);
-            document.getElementById('pBar').style.width = p + '%';
+            if (e.lengthComputable) {
+                const p = Math.round((e.loaded / e.total) * 100);
+                document.getElementById('pBar').style.width = p + '%';
+            }
         };
-        xhr.onload = () => { if(xhr.status === 200) { alert("Done!"); window.location.reload(); } else { alert("Fail"); } };
+        xhr.onload = () => { 
+            if(xhr.status === 200) { 
+                alert("Done!"); window.location.reload(); 
+            } else { 
+                alert("Fail: " + xhr.responseText); 
+            } 
+        };
         xhr.open("POST", "/add_content", true);
         xhr.send(formData);
     }
@@ -308,7 +332,6 @@ def index():
         movies = list(movies_collection.find().sort('_id', -1))
     return render_template_string(HOME_HTML, movies=movies)
 
-# নতুন রাউট: ডিটেইলস/ওয়াচ পেজ
 @app.route('/watch/<movie_id>')
 def watch(movie_id):
     try:
@@ -318,14 +341,12 @@ def watch(movie_id):
     except:
         return redirect('/')
 
-# নতুন রাউট: লাইক দেওয়া
 @app.route('/like/<movie_id>', methods=['POST'])
 def add_like(movie_id):
     movies_collection.update_one({'_id': ObjectId(movie_id)}, {'$inc': {'likes': 1}})
     movie = movies_collection.find_one({'_id': ObjectId(movie_id)})
     return jsonify({'likes': movie.get('likes', 0)})
 
-# নতুন রাউট: কমেন্ট করা
 @app.route('/add_comment/<movie_id>', methods=['POST'])
 def add_comment(movie_id):
     text = request.form.get('text')
@@ -360,30 +381,63 @@ def logout():
     session.clear()
     return redirect('/')
 
+# --- মেইন আপলোড লজিক (File + Link Support) ---
 @app.route('/add_content', methods=['POST'])
 def add_content():
     if not session.get('auth'): return "Unauthorized", 401
-    try:
-        file = request.files.get('video_file')
-        if file:
+    
+    video_url = None
+    
+    # ১. যদি ইউজার লিঙ্ক দিয়ে থাকে
+    link = request.form.get('video_link')
+    if link and link.strip():
+        video_url = link.strip()
+        
+        # গুগল ড্রাইভ লিঙ্ক প্রসেসিং
+        if "drive.google.com" in video_url:
+            try:
+                # ফাইল আইডি বের করা
+                file_id = None
+                if "/d/" in video_url:
+                    file_id = video_url.split("/d/")[1].split("/")[0]
+                elif "id=" in video_url:
+                    file_id = video_url.split("id=")[1].split("&")[0]
+                
+                # ডাইরেক্ট ডাউনলোড লিঙ্কে কনভার্ট করা
+                if file_id:
+                    video_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            except:
+                pass # কনভার্ট না হলে অরিজিনাল লিঙ্ক থাকবে
+
+    # ২. যদি ইউজার ফাইল আপলোড করে (লিঙ্ক না দিলে)
+    elif request.files.get('video_file'):
+        try:
+            file = request.files.get('video_file')
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tf:
                 file.save(tf.name)
                 temp_path = tf.name
+            
             upload = cloudinary.uploader.upload_large(temp_path, resource_type="video", chunk_size=6000000)
             os.remove(temp_path)
-            movies_collection.insert_one({
-                "title": request.form.get('title'),
-                "year": request.form.get('year'),
-                "poster": request.form.get('poster'),
-                "backdrop": request.form.get('backdrop'),
-                "type": request.form.get('type'),
-                "video_url": upload['secure_url'],
-                "likes": 0,
-                "comments": []
-            })
-            return "OK", 200
-    except Exception as e: return str(e), 500
-    return "No file", 400
+            video_url = upload['secure_url']
+        except Exception as e:
+            return f"Upload Error: {str(e)}", 500
+            
+    # ফাইনাল সেভ
+    if video_url:
+        movies_collection.insert_one({
+            "title": request.form.get('title'),
+            "year": request.form.get('year'),
+            "poster": request.form.get('poster'),
+            "backdrop": request.form.get('backdrop'),
+            "type": request.form.get('type'),
+            "video_url": video_url,
+            "likes": 0,
+            "comments": []
+        })
+        return "OK", 200
+        
+    return "Please provide a file or a link", 400
 
 @app.route('/delete/<movie_id>')
 def delete_movie(movie_id):
