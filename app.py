@@ -1,6 +1,7 @@
 import os
 import requests
 import tempfile
+import datetime
 from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 from pymongo import MongoClient
 from bson.objectid import ObjectId
@@ -10,7 +11,6 @@ import cloudinary.uploader
 app = Flask(__name__)
 
 # --- কনফিগারেশন ---
-# .env ফাইল না থাকলে ডিফল্ট ভ্যালু কাজ করবে
 app.secret_key = os.environ.get("SECRET_KEY", "moviebox_2026_super_secret")
 MONGO_URI = os.environ.get("MONGO_URI")
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY")
@@ -31,83 +31,71 @@ movies_collection = db['movies']
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("ADMIN_PASS", "12345")
 
-# --- ডিজাইন (CSS) - সম্পূর্ণ মোবাইল ফ্রেন্ডলি ---
+# --- ডিজাইন (CSS) ---
 CSS = """
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <style>
-    :root { --main: #e50914; --bg: #0b0b0b; --card: #181818; --text: #fff; --gray: #333; }
+    :root { --main: #e50914; --bg: #0f0f0f; --card: #181818; --text: #fff; --gray: #aaa; --dark-gray: #222; }
     * { box-sizing: border-box; margin: 0; padding: 0; outline: none; -webkit-tap-highlight-color: transparent; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; background: var(--bg); color: var(--text); padding-bottom: 20px; }
-    
+    body { font-family: Roboto, Arial, sans-serif; background: var(--bg); color: var(--text); padding-bottom: 30px; }
+    a { text-decoration: none; color: inherit; }
+
     /* Navbar */
-    .navbar { background: rgba(0,0,0,0.9); padding: 12px 15px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 1000; border-bottom: 1px solid var(--gray); backdrop-filter: blur(10px); }
-    .logo { color: var(--main); font-size: 20px; font-weight: 800; text-decoration: none; letter-spacing: 1px; }
+    .navbar { background: rgba(15, 15, 15, 0.95); padding: 12px 15px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 1000; border-bottom: 1px solid #333; }
+    .logo { color: var(--main); font-size: 20px; font-weight: 800; letter-spacing: -1px; }
+    .btn { background: var(--main); color: white; border: none; padding: 8px 16px; border-radius: 20px; cursor: pointer; font-weight: 600; font-size: 13px; display: inline-block; }
     
-    /* Buttons */
-    .btn { background: var(--main); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; text-decoration: none; font-weight: 600; font-size: 13px; display: inline-block; transition: 0.2s; }
-    .btn:active { transform: scale(0.95); }
-    .btn-danger { background: #e74c3c; width: 100%; margin-top: 8px; padding: 10px; }
+    /* Home Layout */
+    .container { max-width: 1000px; margin: auto; padding: 15px; }
+    .search-box { margin: 10px 0 20px; display: flex; justify-content: center; }
+    .search-input { width: 100%; max-width: 500px; padding: 10px 20px; border-radius: 50px; border: 1px solid #333; background: #121212; color: white; font-size: 16px; }
 
-    /* Layout */
-    .container { max-width: 100%; padding: 15px; margin: auto; }
-    
-    /* Search Bar */
-    .search-box { margin: 15px 0; display: flex; justify-content: center; }
-    .search-input { width: 100%; max-width: 500px; padding: 12px 20px; border-radius: 50px; border: 1px solid var(--gray); background: #1a1a1a; color: white; font-size: 16px; transition: 0.3s; }
-    .search-input:focus { border-color: var(--main); background: #222; }
+    /* Movie Grid */
+    .movie-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    @media (min-width: 768px) { .movie-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 20px; } }
 
-    /* Movie Grid (Mobile Optimized) */
-    .movie-grid { 
-        display: grid; 
-        grid-template-columns: repeat(2, 1fr); /* মোবাইলে ২ কলাম */
-        gap: 10px; 
-        margin-top: 15px; 
-    }
-    
-    /* বড় স্ক্রিনে কলাম বাড়বে */
-    @media (min-width: 768px) {
-        .movie-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 20px; }
-    }
-
-    .card { background: var(--card); border-radius: 6px; overflow: hidden; position: relative; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+    .card { background: var(--card); border-radius: 8px; overflow: hidden; position: relative; transition: 0.2s; }
+    .card:active { transform: scale(0.98); }
     .card img { width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block; }
-    .card-info { padding: 8px; }
-    .card-title { font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px; }
-    .card-meta { font-size: 11px; color: #aaa; }
-    
-    /* Player Section */
-    .player-section { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 2000; display: none; flex-direction: column; justify-content: center; }
-    .player-header { padding: 15px; position: absolute; top: 0; left: 0; width: 100%; z-index: 2001; display: flex; justify-content: space-between; background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent); }
-    
-    /* Admin Styles */
-    .admin-box { background: #1a1a1a; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--gray); }
-    .admin-header { font-size: 18px; color: var(--main); margin-bottom: 15px; border-bottom: 1px solid var(--gray); padding-bottom: 10px; }
-    
-    /* Form Elements */
-    input[type="text"], select, input[type="file"] { width: 100%; padding: 12px; margin: 8px 0; border-radius: 5px; border: 1px solid var(--gray); background: #252525; color: white; font-size: 16px; /* Font 16px prevents iOS zoom */ }
-    input:focus { border-color: var(--main); }
-    
-    /* Search Results in Admin */
-    .search-results { display: flex; overflow-x: auto; gap: 10px; padding-bottom: 10px; -webkit-overflow-scrolling: touch; }
-    .search-item { flex: 0 0 100px; background: #222; padding: 5px; border-radius: 5px; text-align: center; font-size: 10px; }
-    .search-item img { width: 100%; border-radius: 4px; height: 140px; object-fit: cover; }
-    
-    /* Progress Bar */
-    .progress-container { width: 100%; background: #333; height: 10px; border-radius: 5px; margin: 15px 0; overflow: hidden; display: none; }
-    .progress-bar { height: 100%; background: var(--main); width: 0%; transition: width 0.3s; }
+    .card-info { padding: 10px; }
+    .card-title { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
+    .card-meta { font-size: 12px; color: var(--gray); }
 
-    /* Plyr Customization */
-    .plyr { width: 100%; height: 100%; }
+    /* --- WATCH PAGE STYLES --- */
+    .watch-video-container { width: 100%; position: sticky; top: 0; z-index: 900; background: #000; }
+    .video-info { padding: 15px; border-bottom: 1px solid #333; }
+    .video-title { font-size: 18px; font-weight: bold; margin-bottom: 8px; line-height: 1.3; }
+    .video-meta { font-size: 13px; color: var(--gray); display: flex; justify-content: space-between; align-items: center; }
+    
+    .action-bar { display: flex; gap: 15px; margin-top: 15px; }
+    .action-btn { background: #222; color: white; border: none; padding: 8px 15px; border-radius: 18px; display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+    .action-btn.liked { color: var(--main); background: rgba(229, 9, 20, 0.1); }
+    
+    .comments-section { padding: 15px; }
+    .comment-form { display: flex; gap: 10px; margin-bottom: 20px; }
+    .comment-input { flex: 1; background: transparent; border: none; border-bottom: 1px solid #444; color: white; padding: 8px; }
+    .comment-list { display: flex; flex-direction: column; gap: 15px; }
+    .comment-item { display: flex; gap: 10px; }
+    .avatar { width: 35px; height: 35px; background: #333; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #888; font-size: 12px; }
+    .comment-content b { font-size: 13px; display: block; color: #ddd; }
+    .comment-content p { font-size: 13px; color: var(--gray); margin-top: 2px; }
+
+    /* Admin Styles */
+    .admin-box { background: #1a1a1a; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #333; }
+    input[type="text"], select, input[type="file"] { width: 100%; padding: 12px; margin: 8px 0; border-radius: 5px; border: 1px solid #444; background: #222; color: white; }
+    
+    /* Plyr Override */
+    .plyr { width: 100%; aspect-ratio: 16/9; }
 </style>
 <!-- Plyr Player -->
 <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
 <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
 """
 
-# --- পাবলিক হোমপেজ (Mobile Friendly) ---
+# --- পাবলিক হোমপেজ (HOME_HTML) ---
 HOME_HTML = CSS + """
 <nav class="navbar">
-    <a href="/" class="logo">M-BOX</a>
+    <a href="/" class="logo">PLAYBOX</a>
     <a href="/admin" class="btn">ADMIN</a>
 </nav>
 
@@ -118,65 +106,105 @@ HOME_HTML = CSS + """
         </form>
     </div>
 
-    <!-- Full Screen Player -->
-    <div id="playerBox" class="player-section">
-        <div class="player-header">
-            <h3 id="pTitle" style="color:white; font-size:16px; margin:0;">Playing...</h3>
-            <button onclick="closePlayer()" class="btn" style="background:rgba(255,255,255,0.2); padding:5px 12px;">✕ Close</button>
-        </div>
-        <video id="player" playsinline controls>
-            <source src="" type="video/mp4" />
-        </video>
-    </div>
-
-    <!-- Movie Grid -->
     <div class="movie-grid">
         {% if movies|length == 0 %}
-            <p style="grid-column: 1/-1; text-align:center; color:#777; margin-top:20px;">No results found.</p>
+            <p style="grid-column: 1/-1; text-align:center; color:#777; margin-top:20px;">No content found.</p>
         {% endif %}
 
         {% for m in movies %}
-        <div class="card" onclick="playMovie('{{ m.video_url }}', '{{ m.title }}')">
+        <!-- লিঙ্কে ক্লিক করলে নতুন পেজে যাবে -->
+        <a href="/watch/{{ m._id }}" class="card">
             <img src="{{ m.poster }}" loading="lazy" onerror="this.src='https://via.placeholder.com/300x450?text=No+Poster'">
             <div class="card-info">
                 <div class="card-title">{{ m.title }}</div>
                 <div class="card-meta">{{ m.year }} • {{ m.type|upper }}</div>
             </div>
-        </div>
+        </a>
         {% endfor %}
+    </div>
+</div>
+"""
+
+# --- ওয়াচ পেজ (WATCH_HTML) - ইউটিউব স্টাইল ---
+WATCH_HTML = CSS + """
+<nav class="navbar">
+    <a href="/" class="logo">PLAYBOX</a>
+    <a href="/" class="btn" style="background:#333;">BACK</a>
+</nav>
+
+<!-- ভিডিও প্লেয়ার সেকশন -->
+<div class="watch-video-container">
+    <video id="player" playsinline controls autoplay>
+        <source src="{{ movie.video_url }}" type="video/mp4" />
+    </video>
+</div>
+
+<div class="container" style="padding-top:0;">
+    <!-- ইনফো সেকশন -->
+    <div class="video-info">
+        <div class="video-title">{{ movie.title }}</div>
+        <div class="video-meta">
+            <span>{{ movie.year }} • {{ movie.type|upper }}</span>
+            <span id="likeCount">{{ movie.likes|default(0) }} Likes</span>
+        </div>
+        
+        <!-- লাইক বাটন -->
+        <div class="action-bar">
+            <button class="action-btn" onclick="toggleLike('{{ movie._id }}')">
+                <span>👍</span> Like
+            </button>
+            <button class="action-btn" onclick="alert('Share URL copied!'); navigator.clipboard.writeText(window.location.href);">
+                <span>↗️</span> Share
+            </button>
+        </div>
+    </div>
+
+    <!-- কমেন্ট সেকশন -->
+    <div class="comments-section">
+        <h4 style="margin-bottom:15px;">Comments</h4>
+        
+        <form action="/add_comment/{{ movie._id }}" method="POST" class="comment-form">
+            <input type="text" name="text" class="comment-input" placeholder="Add a comment..." required autocomplete="off">
+            <button class="btn" style="border-radius:50%; width:35px; height:35px; padding:0;">➤</button>
+        </form>
+
+        <div class="comment-list">
+            {% for c in movie.comments|reverse %}
+            <div class="comment-item">
+                <div class="avatar">{{ c.user[0]|upper }}</div>
+                <div class="comment-content">
+                    <b>{{ c.user }}</b>
+                    <p>{{ c.text }}</p>
+                </div>
+            </div>
+            {% else %}
+            <p style="color:#555; font-size:12px;">No comments yet. Be the first!</p>
+            {% endfor %}
+        </div>
     </div>
 </div>
 
 <script>
-    let player;
+    // প্লেয়ার চালু
     document.addEventListener('DOMContentLoaded', () => {
-        player = new Plyr('#player', {
+        const player = new Plyr('#player', {
             controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'fullscreen'],
-            hideControls: true
         });
     });
 
-    function playMovie(url, title) {
-        const box = document.getElementById('playerBox');
-        box.style.display = 'flex';
-        document.getElementById('pTitle').innerText = title;
-        
-        player.source = { type: 'video', sources: [{ src: url, type: 'video/mp4' }] };
-        player.play();
-        
-        // Fullscreen request for mobile
-        if (box.requestFullscreen) box.requestFullscreen();
-    }
-
-    function closePlayer() {
-        player.stop();
-        document.getElementById('playerBox').style.display = 'none';
-        if (document.exitFullscreen) document.exitFullscreen();
+    // লাইক ফাংশন (AJAX)
+    function toggleLike(id) {
+        fetch(`/like/${id}`, { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('likeCount').innerText = data.likes + ' Likes';
+                document.querySelector('.action-btn').classList.add('liked');
+            });
     }
 </script>
 """
 
-# --- এডমিন ড্যাশবোর্ড (Mobile Optimized) ---
+# --- এডমিন প্যানেল (ADMIN_HTML) ---
 ADMIN_HTML = CSS + """
 <nav class="navbar">
     <a href="/" class="logo">ADMIN</a>
@@ -184,60 +212,48 @@ ADMIN_HTML = CSS + """
 </nav>
 <div class="container">
     
-    <!-- TMDB Search -->
     <div class="admin-box">
-        <div class="admin-header">Auto Fill (TMDB)</div>
+        <h3 style="margin-bottom:10px; color:var(--main);">1. Auto Fill (TMDB)</h3>
         <div style="display:flex; gap:8px;">
-            <input type="text" id="tmdbQuery" placeholder="Movie Name..." style="margin:0;">
-            <button onclick="searchTMDB()" class="btn" style="height:46px;">GO</button>
+            <input type="text" id="tmdbQuery" placeholder="Movie Name...">
+            <button onclick="searchTMDB()" class="btn">GO</button>
         </div>
-        <div id="searchResults" class="search-results" style="margin-top:15px;"></div>
+        <div id="searchResults" style="display:flex; overflow-x:auto; gap:10px; margin-top:15px;"></div>
     </div>
 
-    <!-- Upload Form -->
     <div class="admin-box">
-        <div class="admin-header">Upload Video</div>
+        <h3 style="margin-bottom:10px; color:var(--main);">2. Upload Content</h3>
         <form id="uploadForm">
             <input type="text" id="fTitle" name="title" placeholder="Title" required>
             <div style="display:flex; gap:10px;">
                 <input type="text" id="fYear" name="year" placeholder="Year" style="flex:1;">
-                <select name="type" id="fType" onchange="checkType()" style="flex:1; margin:8px 0;">
+                <select name="type" id="fType" style="flex:1; margin:8px 0;">
                     <option value="movie">Movie</option>
                     <option value="tv">TV Show</option>
                 </select>
             </div>
-            
             <input type="text" id="fPoster" name="poster" placeholder="Poster Link" required>
             <input type="text" id="fBack" name="backdrop" placeholder="Backdrop Link">
-            <input type="text" id="fTrailer" name="trailer" placeholder="Trailer Link">
-            
-            <div id="tvFields" style="display:none; gap:10px;">
-                <input type="text" name="season" placeholder="Season (e.g. 1)">
-                <input type="text" name="episode" placeholder="Episode (e.g. 5)">
-            </div>
-            
-            <label style="display:block; margin-top:10px; color:#aaa; font-size:12px;">Select Video File:</label>
             <input type="file" id="fVideo" name="video_file" accept="video/mp4" required style="padding:8px;">
             
-            <div class="progress-container" id="pCont">
-                <div class="progress-bar" id="pBar"></div>
+            <div style="background:#333; height:5px; margin:15px 0; border-radius:5px; overflow:hidden;">
+                <div id="pBar" style="background:var(--main); width:0%; height:100%;"></div>
             </div>
-            <p id="statusMsg" style="text-align:center; font-size:12px; color:var(--main); display:none; margin-bottom:10px;">Uploading... Don't close window.</p>
+            <p id="statusMsg" style="text-align:center; color:var(--main); display:none; margin-bottom:10px;">Uploading... Please wait.</p>
             
-            <button type="button" onclick="startUpload()" class="btn" style="width:100%; padding:14px;">UPLOAD CONTENT</button>
+            <button type="button" onclick="startUpload()" class="btn" style="width:100%;">UPLOAD</button>
         </form>
     </div>
 
-    <!-- Manage Content -->
     <div class="admin-box">
-        <div class="admin-header">Delete Content</div>
+        <h3 style="margin-bottom:10px;">Manage Content</h3>
         <div class="movie-grid">
             {% for m in movies %}
             <div class="card" style="cursor:default;">
-                <img src="{{ m.poster }}" style="height:120px;">
+                <img src="{{ m.poster }}" style="height:100px;">
                 <div class="card-info">
                     <div class="card-title">{{ m.title }}</div>
-                    <a href="/delete/{{ m._id }}" onclick="return confirm('Delete {{ m.title }}?')" class="btn btn-danger">DELETE</a>
+                    <a href="/delete/{{ m._id }}" onclick="return confirm('Delete?')" class="btn" style="background:#d32f2f; font-size:10px; padding:5px 10px;">DELETE</a>
                 </div>
             </div>
             {% endfor %}
@@ -246,68 +262,35 @@ ADMIN_HTML = CSS + """
 </div>
 
 <script>
-    function checkType() { document.getElementById('tvFields').style.display = (document.getElementById('fType').value === 'tv') ? 'flex' : 'none'; }
-    
     async function searchTMDB() {
         const q = document.getElementById('tmdbQuery').value;
-        if(!q) return alert("Please type a name!");
-        const btn = document.querySelector('button[onclick="searchTMDB()"]');
-        btn.innerText = "...";
-        
-        try {
-            const res = await fetch(`/api/tmdb?q=${q}`);
-            const data = await res.json();
-            const div = document.getElementById('searchResults');
-            div.innerHTML = '';
-            
-            if(!data.results || data.results.length === 0) {
-                div.innerHTML = '<p style="color:#777; width:100%; text-align:center;">No match found.</p>';
-            }
-
-            data.results.slice(0, 10).forEach(item => {
-                const d = document.createElement('div');
-                d.className = 'search-item';
-                d.innerHTML = `<img src="https://image.tmdb.org/t/p/w200${item.poster_path || ''}"><p>${item.title || item.name}</p>`;
-                d.onclick = () => {
-                    document.getElementById('fTitle').value = item.title || item.name;
-                    document.getElementById('fYear').value = (item.release_date || item.first_air_date || '').split('-')[0];
-                    document.getElementById('fPoster').value = `https://image.tmdb.org/t/p/w500${item.poster_path}`;
-                    document.getElementById('fBack').value = `https://image.tmdb.org/t/p/original${item.backdrop_path}`;
-                    document.getElementById('fType').value = item.title ? 'movie' : 'tv';
-                    checkType();
-                    div.innerHTML = ''; // Clear after selection
-                };
-                div.appendChild(d);
-            });
-        } catch(e) { alert("Error connecting to TMDB"); }
-        btn.innerText = "GO";
+        const res = await fetch(`/api/tmdb?q=${q}`);
+        const data = await res.json();
+        const div = document.getElementById('searchResults');
+        div.innerHTML = '';
+        data.results.slice(0, 10).forEach(item => {
+            const d = document.createElement('div');
+            d.innerHTML = `<img src="https://image.tmdb.org/t/p/w200${item.poster_path}" style="width:80px; border-radius:4px;">`;
+            d.onclick = () => {
+                document.getElementById('fTitle').value = item.title || item.name;
+                document.getElementById('fYear').value = (item.release_date || item.first_air_date || '').split('-')[0];
+                document.getElementById('fPoster').value = `https://image.tmdb.org/t/p/w500${item.poster_path}`;
+                document.getElementById('fBack').value = `https://image.tmdb.org/t/p/original${item.backdrop_path}`;
+                div.innerHTML = '';
+            };
+            div.appendChild(d);
+        });
     }
 
     function startUpload() {
-        const form = document.getElementById('uploadForm');
-        if(!form.checkValidity()) { form.reportValidity(); return; }
-        
-        const formData = new FormData(form);
+        const formData = new FormData(document.getElementById('uploadForm'));
         const xhr = new XMLHttpRequest();
-        
-        document.getElementById('pCont').style.display = 'block';
         document.getElementById('statusMsg').style.display = 'block';
-        
         xhr.upload.onprogress = (e) => {
             const p = Math.round((e.loaded / e.total) * 100);
             document.getElementById('pBar').style.width = p + '%';
         };
-        
-        xhr.onload = () => { 
-            if(xhr.status === 200) { 
-                alert("Success!"); 
-                window.location.reload(); 
-            } else { 
-                alert("Failed: " + xhr.responseText);
-                document.getElementById('statusMsg').innerText = "Upload Failed!";
-            } 
-        };
-        
+        xhr.onload = () => { if(xhr.status === 200) { alert("Done!"); window.location.reload(); } else { alert("Fail"); } };
         xhr.open("POST", "/add_content", true);
         xhr.send(formData);
     }
@@ -325,42 +308,52 @@ def index():
         movies = list(movies_collection.find().sort('_id', -1))
     return render_template_string(HOME_HTML, movies=movies)
 
+# নতুন রাউট: ডিটেইলস/ওয়াচ পেজ
+@app.route('/watch/<movie_id>')
+def watch(movie_id):
+    try:
+        movie = movies_collection.find_one({'_id': ObjectId(movie_id)})
+        if not movie: return redirect('/')
+        return render_template_string(WATCH_HTML, movie=movie)
+    except:
+        return redirect('/')
+
+# নতুন রাউট: লাইক দেওয়া
+@app.route('/like/<movie_id>', methods=['POST'])
+def add_like(movie_id):
+    movies_collection.update_one({'_id': ObjectId(movie_id)}, {'$inc': {'likes': 1}})
+    movie = movies_collection.find_one({'_id': ObjectId(movie_id)})
+    return jsonify({'likes': movie.get('likes', 0)})
+
+# নতুন রাউট: কমেন্ট করা
+@app.route('/add_comment/<movie_id>', methods=['POST'])
+def add_comment(movie_id):
+    text = request.form.get('text')
+    if text:
+        comment = {'user': 'Guest', 'text': text, 'time': datetime.datetime.now()}
+        movies_collection.update_one({'_id': ObjectId(movie_id)}, {'$push': {'comments': comment}})
+    return redirect(url_for('watch', movie_id=movie_id))
+
 @app.route('/api/tmdb')
 def tmdb_api():
     q = request.args.get('q')
     if not TMDB_API_KEY: return jsonify({"results": []})
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={q}"
-    try:
-        return jsonify(requests.get(url).json())
-    except:
-        return jsonify({"results": []})
+    return jsonify(requests.get(url).json())
 
 @app.route('/admin')
 def admin():
     if session.get('auth'): 
         movies = list(movies_collection.find().sort('_id', -1))
         return render_template_string(ADMIN_HTML, movies=movies)
-    
-    return render_template_string(CSS + """
-    <div style="height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;">
-        <div style="background:#1a1a1a; padding:30px; border-radius:10px; width:100%; max-width:400px; text-align:center;">
-            <h2 style="color:var(--main); margin-bottom:20px;">ADMIN LOGIN</h2>
-            <form action="/login" method="POST">
-                <input type="text" name="u" placeholder="User" required style="text-align:center;">
-                <input type="password" name="p" placeholder="Pass" required style="text-align:center;">
-                <button class="btn" style="width:100%; margin-top:15px; padding:12px;">LOGIN</button>
-            </form>
-            <a href="/" style="display:block; margin-top:15px; color:#777; text-decoration:none; font-size:12px;">Back to Home</a>
-        </div>
-    </div>
-    """)
+    return render_template_string(CSS + """<div style="padding:50px; text-align:center;"><h2 style="color:var(--main);">LOGIN</h2><form action="/login" method="POST"><input type="text" name="u" placeholder="User"><input type="password" name="p" placeholder="Pass"><button class="btn" style="width:100%; margin-top:10px;">LOGIN</button></form></div>""")
 
 @app.route('/login', methods=['POST'])
 def login():
     if request.form['u'] == ADMIN_USER and request.form['p'] == ADMIN_PASS:
         session['auth'] = True
         return redirect('/admin')
-    return "Wrong Password! <a href='/admin'>Back</a>"
+    return "Fail"
 
 @app.route('/logout')
 def logout():
@@ -376,33 +369,27 @@ def add_content():
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tf:
                 file.save(tf.name)
                 temp_path = tf.name
-            
             upload = cloudinary.uploader.upload_large(temp_path, resource_type="video", chunk_size=6000000)
             os.remove(temp_path)
-            
             movies_collection.insert_one({
                 "title": request.form.get('title'),
                 "year": request.form.get('year'),
                 "poster": request.form.get('poster'),
                 "backdrop": request.form.get('backdrop'),
-                "trailer": request.form.get('trailer'),
                 "type": request.form.get('type'),
-                "season": request.form.get('season'),
-                "episode": request.form.get('episode'),
-                "video_url": upload['secure_url']
+                "video_url": upload['secure_url'],
+                "likes": 0,
+                "comments": []
             })
             return "OK", 200
-    except Exception as e:
-        return str(e), 500
-    return "No file provided", 400
+    except Exception as e: return str(e), 500
+    return "No file", 400
 
 @app.route('/delete/<movie_id>')
 def delete_movie(movie_id):
     if not session.get('auth'): return redirect('/')
-    try:
-        movies_collection.delete_one({'_id': ObjectId(movie_id)})
-    except:
-        pass
+    try: movies_collection.delete_one({'_id': ObjectId(movie_id)})
+    except: pass
     return redirect('/admin')
 
 if __name__ == '__main__':
