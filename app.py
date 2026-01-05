@@ -1,6 +1,5 @@
 import os
 import requests
-import tempfile
 import datetime
 import re
 from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
@@ -25,6 +24,19 @@ movies_collection = db['movies']
 # এডমিন ক্রেডেনশিয়াল
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("ADMIN_PASS", "12345")
+
+# --- হেল্পার ফাংশন: ইউটিউব আইডি বের করা ---
+def get_yt_id(url):
+    if not url: return ""
+    if "v=" in url: # m.youtube.com/watch?v=ID
+        return url.split("v=")[1].split("&")[0]
+    elif "youtu.be" in url: # youtu.be/ID
+        return url.split("/")[-1].split("?")[0]
+    elif "embed" in url: # youtube.com/embed/ID
+        return url.split("/")[-1]
+    return ""
+
+app.jinja_env.globals.update(get_yt_id=get_yt_id)
 
 # --- ডিজাইন (CSS) ---
 CSS = """
@@ -65,30 +77,19 @@ CSS = """
     .video-meta { font-size: 13px; color: var(--gray); display: flex; justify-content: space-between; align-items: center; }
     .action-bar { display: flex; gap: 15px; margin-top: 15px; }
     .action-btn { background: #222; color: white; border: none; padding: 8px 15px; border-radius: 18px; display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
-    
-    /* Comments */
-    .comments-section { padding: 15px; }
-    .comment-form { display: flex; gap: 10px; margin-bottom: 20px; }
-    .comment-input { flex: 1; background: transparent; border: none; border-bottom: 1px solid #444; color: white; padding: 8px; }
-    .comment-list { display: flex; flex-direction: column; gap: 15px; }
-    .comment-item { display: flex; gap: 10px; }
-    .avatar { width: 35px; height: 35px; background: #333; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #888; font-size: 12px; }
-    .comment-content b { font-size: 13px; display: block; color: #ddd; }
-    .comment-content p { font-size: 13px; color: var(--gray); margin-top: 2px; }
+    .action-btn.liked { color: var(--main); background: rgba(229, 9, 20, 0.1); }
 
     /* Admin Styles */
     .admin-box { background: #1a1a1a; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #333; }
     input[type="text"], select { width: 100%; padding: 12px; margin: 8px 0; border-radius: 5px; border: 1px solid #444; background: #222; color: white; }
+    .upload-btn-widget { background: #222; border: 2px dashed #444; color: white; width: 100%; padding: 20px; text-align: center; cursor: pointer; border-radius: 5px; margin: 10px 0; }
     
-    .or-divider { text-align: center; margin: 15px 0; position: relative; }
-    .or-divider span { background: #1a1a1a; padding: 0 10px; color: #777; font-size: 12px; position: relative; z-index: 1; }
-    .or-divider::before { content: ''; position: absolute; top: 50%; left: 0; width: 100%; height: 1px; background: #333; z-index: 0; }
-
     /* Plyr */
     .plyr { width: 100%; height: 100%; }
 </style>
 <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
 <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
+<script src="https://upload-widget.cloudinary.com/global/all.js" type="text/javascript"></script>
 """
 
 # --- হোমপেজ ---
@@ -123,7 +124,7 @@ HOME_HTML = CSS + """
 </div>
 """
 
-# --- ওয়াচ পেজ (Fixed for Google Drive) ---
+# --- ওয়াচ পেজ (Final Smart Player) ---
 WATCH_HTML = CSS + """
 <nav class="navbar">
     <a href="/" class="logo">PLAYBOX</a>
@@ -131,21 +132,26 @@ WATCH_HTML = CSS + """
 </nav>
 
 <div class="watch-video-container">
-    {% if 'youtube.com' in movie.video_url or 'youtu.be' in movie.video_url or 'drive.google.com' in movie.video_url %}
-        <!-- YouTube / Google Drive Player (Iframe) -->
-        <div class="iframe-container">
-            {% if 'drive.google.com' in movie.video_url %}
-                <iframe src="{{ movie.video_url }}" allow="autoplay"></iframe>
-            {% else %}
-                <iframe src="{{ movie.video_url|replace('watch?v=', 'embed/')|replace('youtu.be/', 'www.youtube.com/embed/') }}?autoplay=1&rel=0&modestbranding=1" allowfullscreen allow="autoplay"></iframe>
-            {% endif %}
+    <!-- ১. যদি ইউটিউব ভিডিও হয় -->
+    {% if 'youtu' in movie.video_url %}
+        <div class="plyr__video-embed" id="player">
+            <iframe
+                src="https://www.youtube.com/embed/{{ get_yt_id(movie.video_url) }}?origin=https://plyr.io&amp;iv_load_policy=3&amp;modestbranding=1&amp;playsinline=1&amp;showinfo=0&amp;rel=0&amp;enablejsapi=1"
+                allowfullscreen allowtransparency allow="autoplay">
+            </iframe>
         </div>
+    
+    <!-- ২. যদি গুগল ড্রাইভ হয় -->
+    {% elif 'drive.google.com' in movie.video_url %}
+        <div class="iframe-container">
+            <iframe src="{{ movie.video_url }}" allow="autoplay"></iframe>
+        </div>
+
+    <!-- ৩. যদি ক্লাউডিনারি বা ডাইরেক্ট ভিডিও হয় -->
     {% else %}
-        <!-- Direct MP4 / Cloudinary Player -->
         <video id="player" playsinline controls autoplay>
             <source src="{{ movie.video_url }}" type="video/mp4" />
         </video>
-        <script>document.addEventListener('DOMContentLoaded', () => { new Plyr('#player'); });</script>
     {% endif %}
 </div>
 
@@ -191,15 +197,28 @@ WATCH_HTML = CSS + """
 </div>
 
 <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // Plyr শুধু ইউটিউব আর MP4 এর জন্য কাজ করবে
+        if(document.getElementById('player')) {
+            const player = new Plyr('#player', {
+                controls: ['play-large', 'play', 'progress', 'current-time', 'mute', 'volume', 'fullscreen'],
+                youtube: { noCookie: true, rel: 0, showinfo: 0, iv_load_policy: 3, modestbranding: 1 }
+            });
+        }
+    });
+
     function toggleLike(id) {
         fetch(`/like/${id}`, { method: 'POST' })
             .then(res => res.json())
-            .then(data => { document.getElementById('likeCount').innerText = data.likes + ' Likes'; });
+            .then(data => {
+                document.getElementById('likeCount').innerText = data.likes + ' Likes';
+                document.querySelector('.action-btn').classList.add('liked');
+            });
     }
 </script>
 """
 
-# --- এডমিন প্যানেল ---
+# --- এডমিন প্যানেল (Final Upload) ---
 ADMIN_HTML = CSS + """
 <nav class="navbar">
     <a href="/" class="logo">ADMIN</a>
@@ -217,8 +236,8 @@ ADMIN_HTML = CSS + """
     </div>
 
     <div class="admin-box">
-        <h3 style="margin-bottom:10px; color:var(--main);">2. Upload Content</h3>
-        <form id="uploadForm">
+        <h3 style="margin-bottom:10px; color:var(--main);">2. Add Content</h3>
+        <form id="uploadForm" action="/add_content" method="POST">
             <input type="text" id="fTitle" name="title" placeholder="Title" required>
             <div style="display:flex; gap:10px;">
                 <input type="text" id="fYear" name="year" placeholder="Year" style="flex:1;">
@@ -230,22 +249,19 @@ ADMIN_HTML = CSS + """
             <input type="text" id="fPoster" name="poster" placeholder="Poster Link" required>
             <input type="text" id="fBack" name="backdrop" placeholder="Backdrop Link">
 
-            <!-- OPTION 1: LINK PASTE -->
-            <label style="color:var(--main); font-weight:bold; margin-top:10px; display:block;">Option A: Paste Link (Google Drive / YouTube / Direct)</label>
-            <input type="text" id="fLink" name="video_link" placeholder="Paste Google Drive or YouTube link here...">
+            <!-- Link Option -->
+            <label style="color:var(--main); font-weight:bold; margin-top:10px; display:block;">Option A: Paste Link (YouTube Unlisted / Drive / URL)</label>
+            <input type="text" id="fVideoUrl" name="video_url" placeholder="https://youtu.be/..." oninput="checkInput()">
 
-            <div class="or-divider"><span>OR</span></div>
+            <div style="text-align:center; margin:15px 0; color:#777;">--- OR ---</div>
 
-            <!-- OPTION 2: UPLOAD FILE -->
-            <label style="color:var(--main); font-weight:bold; display:block;">Option B: Upload File (Cloudinary)</label>
-            <input type="file" id="fVideo" name="video_file" accept="video/mp4" style="padding:8px;">
-            
-            <div style="background:#333; height:5px; margin:15px 0; border-radius:5px; overflow:hidden;">
-                <div id="pBar" style="background:var(--main); width:0%; height:100%;"></div>
+            <!-- Upload Option -->
+            <div class="upload-btn-widget" id="uploadWidgetBtn" onclick="openWidget()">
+                📤 Option B: Upload Video (Cloudinary)
             </div>
-            <p id="statusMsg" style="text-align:center; color:var(--main); display:none; margin-bottom:10px;">Processing... Please wait.</p>
+            <p id="uploadStatus" style="text-align:center; font-size:12px; color:var(--main); display:none;">Video Uploaded! Link Auto-filled.</p>
             
-            <button type="button" onclick="startUpload()" class="btn" style="width:100%;">PUBLISH CONTENT</button>
+            <button type="submit" id="saveBtn" class="btn" style="width:100%; margin-top:10px;">SAVE CONTENT</button>
         </form>
     </div>
 
@@ -286,35 +302,31 @@ ADMIN_HTML = CSS + """
         });
     }
 
-    function startUpload() {
-        const form = document.getElementById('uploadForm');
-        
-        const file = document.getElementById('fVideo').files[0];
-        const link = document.getElementById('fLink').value;
-        if(!file && !link) {
-            alert("Please Select a File OR Paste a Link!");
-            return;
+    // --- CLOUDINARY WIDGET ---
+    var myWidget = cloudinary.createUploadWidget({
+        cloudName: '{{ cloud_name }}', 
+        uploadPreset: 'YOUR_PRESET_NAME', // <--- আপনার প্রিসেট নাম এখানে বসাবেন
+        sources: ['local', 'url'],
+        resourceType: 'video',
+        clientAllowedFormats: ['mp4', 'mkv', 'mov'],
+        maxFileSize: 2000000000 // 2GB
+    }, (error, result) => { 
+        if (!error && result && result.event === "success") { 
+            document.getElementById('fVideoUrl').value = result.info.secure_url;
+            document.getElementById('uploadWidgetBtn').style.display = 'none';
+            document.getElementById('uploadStatus').style.display = 'block';
         }
+    });
 
-        const formData = new FormData(form);
-        const xhr = new XMLHttpRequest();
-        document.getElementById('statusMsg').style.display = 'block';
-        
-        xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-                const p = Math.round((e.loaded / e.total) * 100);
-                document.getElementById('pBar').style.width = p + '%';
-            }
-        };
-        xhr.onload = () => { 
-            if(xhr.status === 200) { 
-                alert("Done!"); window.location.reload(); 
-            } else { 
-                alert("Fail: " + xhr.responseText); 
-            } 
-        };
-        xhr.open("POST", "/add_content", true);
-        xhr.send(formData);
+    function openWidget() { myWidget.open(); }
+    function checkInput() { 
+        if(document.getElementById('fVideoUrl').value.length > 0) {
+            document.getElementById('uploadWidgetBtn').style.opacity = '0.5';
+            document.getElementById('uploadWidgetBtn').style.pointerEvents = 'none';
+        } else {
+            document.getElementById('uploadWidgetBtn').style.opacity = '1';
+            document.getElementById('uploadWidgetBtn').style.pointerEvents = 'all';
+        }
     }
 </script>
 """
@@ -364,7 +376,8 @@ def tmdb_api():
 def admin():
     if session.get('auth'): 
         movies = list(movies_collection.find().sort('_id', -1))
-        return render_template_string(ADMIN_HTML, movies=movies)
+        # এখানে cloud_name পাঠানো হচ্ছে যাতে JS এ ব্যবহার করা যায়
+        return render_template_string(ADMIN_HTML, movies=movies, cloud_name=os.environ.get("CLOUDINARY_NAME"))
     return render_template_string(CSS + """<div style="padding:50px; text-align:center;"><h2 style="color:var(--main);">LOGIN</h2><form action="/login" method="POST"><input type="text" name="u" placeholder="User"><input type="password" name="p" placeholder="Pass"><button class="btn" style="width:100%; margin-top:10px;">LOGIN</button></form></div>""")
 
 @app.route('/login', methods=['POST'])
@@ -379,48 +392,24 @@ def logout():
     session.clear()
     return redirect('/')
 
-# --- মেইন আপলোড লজিক (Updated for Google Drive) ---
 @app.route('/add_content', methods=['POST'])
 def add_content():
     if not session.get('auth'): return "Unauthorized", 401
     
-    video_url = None
+    video_url = request.form.get('video_url')
     
-    # লিঙ্ক প্রসেসিং
-    link = request.form.get('video_link')
-    if link and link.strip():
-        video_url = link.strip()
-        
-        # গুগল ড্রাইভ লিঙ্ক ফিক্স (View -> Preview)
-        if "drive.google.com" in video_url:
-            try:
-                # ফাইল আইডি বের করা
-                file_id = None
-                if "/d/" in video_url:
-                    file_id = video_url.split("/d/")[1].split("/")[0]
-                elif "id=" in video_url:
-                    file_id = video_url.split("id=")[1].split("&")[0]
-                
-                # Preview Link এ কনভার্ট করা (Iframe এর জন্য)
-                if file_id:
-                    video_url = f"https://drive.google.com/file/d/{file_id}/preview"
-            except:
-                pass 
-
-    # ফাইল আপলোড
-    elif request.files.get('video_file'):
+    # গুগল ড্রাইভ লিংক ফিক্সার
+    if video_url and "drive.google.com" in video_url:
         try:
-            file = request.files.get('video_file')
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tf:
-                file.save(tf.name)
-                temp_path = tf.name
-            
-            upload = cloudinary.uploader.upload_large(temp_path, resource_type="video", chunk_size=6000000)
-            os.remove(temp_path)
-            video_url = upload['secure_url']
-        except Exception as e:
-            return f"Upload Error: {str(e)}", 500
-            
+            if "/d/" in video_url:
+                file_id = video_url.split("/d/")[1].split("/")[0]
+            elif "id=" in video_url:
+                file_id = video_url.split("id=")[1].split("&")[0]
+            if file_id:
+                video_url = f"https://drive.google.com/file/d/{file_id}/preview"
+        except:
+            pass
+
     if video_url:
         movies_collection.insert_one({
             "title": request.form.get('title'),
@@ -428,13 +417,12 @@ def add_content():
             "poster": request.form.get('poster'),
             "backdrop": request.form.get('backdrop'),
             "type": request.form.get('type'),
-            "video_url": video_url,
+            "video_url": video_url, 
             "likes": 0,
             "comments": []
         })
-        return "OK", 200
-        
-    return "Please provide a file or a link", 400
+        return redirect('/admin')
+    return "Error: No content", 400
 
 @app.route('/delete/<movie_id>')
 def delete_movie(movie_id):
