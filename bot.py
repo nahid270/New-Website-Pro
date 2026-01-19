@@ -424,11 +424,11 @@ def inject_conf(): return dict(config=get_settings())
 
 
 # ========================================================
-# 🔥 UNIVERSAL API LOGIC (হোমপেজ এবং API দুই জায়গাতেই কাজ করবে)
+# 🔥 UNIVERSAL API LOGIC (এটিই আপনার বটের সমস্যার সমাধান)
 # ========================================================
 
 def process_api_request():
-    """বটের রিকোয়েস্ট হ্যান্ডেল করার কমন লজিক"""
+    """বটের রিকোয়েস্ট হ্যান্ডেল করার মেইন ফাংশন"""
     # GET, POST সব জায়গা থেকে ডাটা নেওয়ার চেষ্টা করবে
     key = request.values.get('api') or request.values.get('key')
     url = request.values.get('url') or request.values.get('link')
@@ -452,12 +452,14 @@ def process_api_request():
         
         short_url = request.host_url + code
         
-        # সব ধরনের বটের জন্য রেসপন্স
+        # ✅ এই অংশটি বটের জন্য সবচেয়ে গুরুত্বপূর্ণ
+        # বট 'shortenedUrl' শব্দটি খোঁজে। আমি সব ফরম্যাট দিয়ে দিয়েছি।
         return jsonify({
             'status': 'success',
-            'shortenedUrl': short_url,
-            'short_url': short_url,
-            'url': short_url
+            'shortenedUrl': short_url,   # টেলিগ্রাম বট এটি খোঁজে
+            'short_url': short_url,      # সাধারণ ব্যবহার
+            'url': short_url,
+            'link': short_url
         })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -497,13 +499,16 @@ def redirect_logic(short_code):
     settings = get_settings()
     page = request.args.get('p', 1, type=int)
     
+    # 0 পেজ হলে সরাসরি রিডাইরেক্ট
     if settings['total_pages'] == 0:
         mongo.db.links.update_one({'_id': link['_id']}, {'$inc': {'clicks': 1}})
         return redirect(link['original_url'])
 
+    # স্টেপ বাকি থাকলে টাইমার পেজ দেখাবে
     if page <= settings['total_pages']:
         return render_template_string(TEMPLATES['redirect'], link=link, current_page=page, total_steps=settings['total_pages'])
     
+    # শেষ হলে রিডাইরেক্ট
     mongo.db.links.update_one({'_id': link['_id']}, {'$inc': {'clicks': 1}})
     return redirect(link['original_url'])
 
