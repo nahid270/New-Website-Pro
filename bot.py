@@ -7,40 +7,51 @@ from urllib.parse import urlparse
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify, session
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 from datetime import datetime, timedelta
 from bson.objectid import ObjectId
 from collections import Counter
 
+# --- [CRITICAL CONFIG] আপনার সাব-ফোল্ডারের নাম ---
+# লগের তথ্য অনুযায়ী আপনার ফোল্ডারের নাম ঠিক করে দেওয়া হলো
+SITE_PREFIX = "/view/New-Website-Pro"
+
 app = Flask(__name__)
 
-# --- [FINAL FIX] সাব-ডিরেক্টরি এবং সেশন ফিক্স ---
-# আপনার সমস্যা সমাধানের মূল মন্ত্র হলো এই ক্লাসটি
-class SubdirectoryFix(object):
+# --- [MIDDLEWARE] পাথ ফিক্সার (যাতে লগইন লুপ না হয়) ---
+class ReverseProxied(object):
     def __init__(self, app):
         self.app = app
-    
+
     def __call__(self, environ, start_response):
-        # আমরা চেক করছি রিকোয়েস্টটি আপনার ফোল্ডার থেকে আসছে কিনা
+        script_name = environ.get('HTTP_X_SCRIPT_NAME', '')
+        if script_name:
+            environ['SCRIPT_NAME'] = script_name
+            path_info = environ['PATH_INFO']
+            if path_info.startswith(script_name):
+                environ['PATH_INFO'] = path_info[len(script_name):]
+
+        # যদি অটোমেটিক ডিটেকশন কাজ না করে, আমরা ম্যানুয়ালি ফিক্স করছি
+        # লগের রিকোয়েস্ট পাথ থেকে ফোল্ডার নেম ডিটেক্ট করা হচ্ছে
         path_info = environ.get('PATH_INFO', '')
-        
-        # আপনার লগে দেখা ফোল্ডারের নাম
-        folder_name = '/view/New-Website-Pro'
-        
-        if path_info.startswith(folder_name):
-            # Flask কে বলছি এটাই রুট ফোল্ডার
-            environ['SCRIPT_NAME'] = folder_name
-            # আসল পাথ থেকে ফোল্ডারের নাম সরিয়ে দিচ্ছি যাতে Flask রাউট চিনতে পারে
-            environ['PATH_INFO'] = path_info[len(folder_name):]
+        if path_info.startswith(SITE_PREFIX):
+            environ['SCRIPT_NAME'] = SITE_PREFIX
+            environ['PATH_INFO'] = path_info[len(SITE_PREFIX):]
+
+        scheme = environ.get('HTTP_X_SCHEME', '')
+        if scheme:
+            environ['wsgi.url_scheme'] = scheme
             
         return self.app(environ, start_response)
 
-# মিডলওয়্যারটি অ্যাপে যুক্ত করা হলো
-app.wsgi_app = SubdirectoryFix(app.wsgi_app)
+# অ্যাপে মিডলওয়্যার যুক্ত করা হলো
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+app.wsgi_app = ReverseProxied(app.wsgi_app)
 
 app.secret_key = "premium-super-secret-key-2025"
 
-# কুকি যাতে হারিয়ে না যায় তার জন্য সেটিংস
-app.config['SESSION_COOKIE_PATH'] = '/'  # কুকি পুরো ডোমেইনের জন্য সেট হবে
+# --- সেশন কুকি সেটিংস (লুপ ফিক্স) ---
+app.config['SESSION_COOKIE_PATH'] = '/' 
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
@@ -352,9 +363,16 @@ def admin_panel():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
+        # এখানে কনসোলে প্রিন্ট করছি যাতে বুঝা যায় লগইন হিট হচ্ছে কি না
+        print(f"\n[LOGIN DEBUG] Login attempted with: {request.form.get('password')}")
+        
         if check_password_hash(get_settings()['admin_password'], request.form.get('password')):
             session['logged_in'] = True
+            print("[LOGIN DEBUG] Password Correct! Redirecting to Admin...")
             return redirect(url_for('admin_panel'))
+        else:
+            print("[LOGIN DEBUG] Wrong Password")
+            
     return render_template_string('''<body style="background:#0f172a;height:100vh;display:grid;place-items:center;font-family:sans-serif"><form method="POST" action="" style="background:white;padding:40px;border-radius:30px;text-align:center"><h2 style="font-weight:900;margin-bottom:20px">ADMIN ACCESS</h2><input type="password" name="password" placeholder="Passkey" style="padding:15px;border:1px solid #ddd;border-radius:10px;width:100%;margin-bottom:15px"><button style="padding:15px;width:100%;background:black;color:white;border:none;border-radius:10px;font-weight:bold">LOGIN</button></form></body>''')
 
 @app.route('/logout')
@@ -560,9 +578,12 @@ def handle_ad_steps(short_code):
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
+    
     # [IMPORTANT] অটো রিসেট কোড
     try:
         settings_col.update_one({}, {"$set": {"admin_password": generate_password_hash("admin123")}})
         print("\n[SUCCESS] Password Auto-Reset to: admin123")
     except: pass
+    
+    print(f"\n App Started! Login with: admin123 \n")
     app.run(host='0.0.0.0', port=port)
