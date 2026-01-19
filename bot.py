@@ -13,7 +13,7 @@ app = Flask(__name__)
 # ===============================
 app.config['SECRET_KEY'] = 'my_secret_key_change_it'
 # আপনার MongoDB কানেকশন লিংক (লোকাল বা অ্যাটলাস)
-app.config["MONGO_URI"] = "mongodb://localhost:27017/shortener_db"
+app.config["MONGO_URI"] = "mongodb+srv://MoviaXBot3:MoviaXBot3@cluster0.ictlkq8.mongodb.net/?appName=Cluster0"
 
 mongo = PyMongo(app)
 
