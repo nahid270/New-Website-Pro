@@ -1,6 +1,7 @@
 Flask
-Flask-PyMongo
-pymongo[srv]
+pymongo
 dnspython
 gunicorn
 certifi
+requests
+werkzeug
