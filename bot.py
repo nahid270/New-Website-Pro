@@ -7,21 +7,40 @@ from urllib.parse import urlparse
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify, session
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.middleware.proxy_fix import ProxyFix
 from datetime import datetime, timedelta
 from bson.objectid import ObjectId
 from collections import Counter
 
 app = Flask(__name__)
 
-# --- [CRITICAL FIX] প্রক্সি এবং পাথ কনফিগারেশন ---
-# এটি ক্লাউড সার্ভারের (Replit/CodeSpace) পাথ সমস্যা সমাধান করবে
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+# --- [FINAL FIX] সাব-ডিরেক্টরি এবং সেশন ফিক্স ---
+# আপনার সমস্যা সমাধানের মূল মন্ত্র হলো এই ক্লাসটি
+class SubdirectoryFix(object):
+    def __init__(self, app):
+        self.app = app
+    
+    def __call__(self, environ, start_response):
+        # আমরা চেক করছি রিকোয়েস্টটি আপনার ফোল্ডার থেকে আসছে কিনা
+        path_info = environ.get('PATH_INFO', '')
+        
+        # আপনার লগে দেখা ফোল্ডারের নাম
+        folder_name = '/view/New-Website-Pro'
+        
+        if path_info.startswith(folder_name):
+            # Flask কে বলছি এটাই রুট ফোল্ডার
+            environ['SCRIPT_NAME'] = folder_name
+            # আসল পাথ থেকে ফোল্ডারের নাম সরিয়ে দিচ্ছি যাতে Flask রাউট চিনতে পারে
+            environ['PATH_INFO'] = path_info[len(folder_name):]
+            
+        return self.app(environ, start_response)
+
+# মিডলওয়্যারটি অ্যাপে যুক্ত করা হলো
+app.wsgi_app = SubdirectoryFix(app.wsgi_app)
 
 app.secret_key = "premium-super-secret-key-2025"
 
-# কুকি সেটিংস (Login Loop ফিক্স)
-app.config['SESSION_COOKIE_PATH'] = '/'
+# কুকি যাতে হারিয়ে না যায় তার জন্য সেটিংস
+app.config['SESSION_COOKIE_PATH'] = '/'  # কুকি পুরো ডোমেইনের জন্য সেট হবে
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
@@ -329,7 +348,20 @@ def admin_panel():
     </body></html>
     ''')
 
-# --- রাউটস ---
+# --- [LOGIN] form action is intentionally empty to post to current URL ---
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        if check_password_hash(get_settings()['admin_password'], request.form.get('password')):
+            session['logged_in'] = True
+            return redirect(url_for('admin_panel'))
+    return render_template_string('''<body style="background:#0f172a;height:100vh;display:grid;place-items:center;font-family:sans-serif"><form method="POST" action="" style="background:white;padding:40px;border-radius:30px;text-align:center"><h2 style="font-weight:900;margin-bottom:20px">ADMIN ACCESS</h2><input type="password" name="password" placeholder="Passkey" style="padding:15px;border:1px solid #ddd;border-radius:10px;width:100%;margin-bottom:15px"><button style="padding:15px;width:100%;background:black;color:white;border:none;border-radius:10px;font-weight:bold">LOGIN</button></form></body>''')
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect(url_for('login'))
+
 @app.route('/admin/bulk_shorten', methods=['POST'])
 def bulk_shorten():
     if not is_logged_in(): return redirect(url_for('login'))
@@ -526,62 +558,11 @@ def handle_ad_steps(short_code):
         </script>
     </body></html>''')
 
-# --- [MODIFIED] লগইন (FIXED FORM ACTION) ---
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        if check_password_hash(get_settings()['admin_password'], request.form.get('password')):
-            session['logged_in'] = True
-            return redirect(url_for('admin_panel'))
-            
-    # [IMPORTANT] form action="" রাখা হয়েছে যাতে বর্তমান URL-এই পোস্ট হয়
-    return render_template_string('''<body style="background:#0f172a;height:100vh;display:grid;place-items:center;font-family:sans-serif"><form method="POST" action="" style="background:white;padding:40px;border-radius:30px;text-align:center"><h2 style="font-weight:900;margin-bottom:20px">ADMIN ACCESS</h2><input type="password" name="password" placeholder="Passkey" style="padding:15px;border:1px solid #ddd;border-radius:10px;width:100%;margin-bottom:15px"><button style="padding:15px;width:100%;background:black;color:white;border:none;border-radius:10px;font-weight:bold">LOGIN</button><a href="/forgot-password" style="display:block;margin-top:15px;font-size:12px;color:blue">Forgot?</a></form></body>''')
-
-@app.route('/logout')
-def logout():
-    session.pop('logged_in', None)
-    return redirect(url_for('login'))
-
-@app.route('/forgot-password', methods=['GET', 'POST'])
-def forgot_password():
-    if request.method == 'POST':
-        otp = str(random.randint(100000, 999999))
-        print(f"\n\n{'='*30}\n YOUR RECOVERY OTP IS: {otp}\n{'='*30}\n\n")
-        otp_col.update_one({"id": "admin_reset"}, {"$set": {"otp": otp, "expire_at": datetime.now() + timedelta(minutes=5)}}, upsert=True)
-        session['reset_id'] = "recovery_mode"
-        return redirect(url_for('verify_otp'))
-    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST" action=""><p style="margin-bottom:10px">Type anything to generate console OTP</p><input name="telegram_id" placeholder="Telegram ID / Any Text" style="padding:10px"><button>Send OTP</button></form></body>')
-
-@app.route('/verify-otp', methods=['GET', 'POST'])
-def verify_otp():
-    if request.method == 'POST':
-        otp = request.form.get('otp')
-        data = otp_col.find_one({"id": "admin_reset"})
-        if data and data['otp'] == otp:
-            session['otp_verified'] = True
-            return redirect(url_for('reset_password'))
-        else:
-            return "<h3 style='color:red'>Wrong OTP. Check console.</h3><a href='/verify-otp'>Try Again</a>"
-    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST" action=""><input name="otp" placeholder="Check Console for OTP" style="padding:10px"><button>Verify</button></form></body>')
-
-@app.route('/reset-password', methods=['GET', 'POST'])
-def reset_password():
-    if request.method == 'POST':
-        settings_col.update_one({}, {"$set": {"admin_password": generate_password_hash(request.form.get('password'))}})
-        session.clear()
-        return 'Done. <a href="/login">Login</a>'
-    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST" action=""><input type="password" name="password" placeholder="New Password" style="padding:10px"><button>Update</button></form></body>')
-
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    
-    # [IMPORTANT] অটোমেটিক পাসওয়ার্ড রিসেট (যেহেতু আপনার Magic Link কাজ করছে না)
-    # অ্যাপ রান করলেই পাসওয়ার্ড admin123 হয়ে যাবে
+    # [IMPORTANT] অটো রিসেট কোড
     try:
-        print("\n[INFO] Resetting Admin Password to: admin123")
         settings_col.update_one({}, {"$set": {"admin_password": generate_password_hash("admin123")}})
-    except Exception as e:
-        print(f"Password reset failed: {e}")
-        
-    print(f"\n App Started! Login with: admin123 \n")
+        print("\n[SUCCESS] Password Auto-Reset to: admin123")
+    except: pass
     app.run(host='0.0.0.0', port=port)
