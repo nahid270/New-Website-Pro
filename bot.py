@@ -14,15 +14,20 @@ from collections import Counter
 app = Flask(__name__)
 
 # --- কনফিগারেশন ---
-app.secret_key = os.environ.get("SECRET_KEY", "premium-super-secret-key-2025")
-MONGO_URI = os.environ.get("MONGO_URI") 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8469682967:AAEWrNWBWjiYT3_L47Xe_byORfD6IIsFD34")
+app.secret_key = "premium-super-secret-key-2025"
+
+# [IMPORTANT] নিচে আপনার MongoDB কানেকশন স্ট্রিং বসান (কোটেশনের ভেতরে)
+MONGO_URI = "mongodb+srv://MoviaXBot3:MoviaXBot3@cluster0.ictlkq8.mongodb.net/?appName=Cluster0"
+
+TELEGRAM_BOT_TOKEN = "8469682967:AAEWrNWBWjiYT3_L47Xe_byORfD6IIsFD34"
 
 # --- ডাটাবেস কানেকশন ---
-if not MONGO_URI:
-    print("Warning: MONGO_URI is not set! App may crash.")
+if "mongodb" not in MONGO_URI:
+    print("Warning: MONGO_URI is not set correctly! Please update line 23.")
     
+# TLS Allow Invalid Certificates রাখা হয়েছে যাতে কানেকশনে সমস্যা না হয়
 client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True, serverSelectionTimeoutMS=5000)
+
 db = client['premium_url_bot']
 urls_col = db['urls']
 settings_col = db['settings']
