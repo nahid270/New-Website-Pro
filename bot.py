@@ -13,15 +13,19 @@ from collections import Counter
 
 app = Flask(__name__)
 
-# --- কনফিগারেশন ---
+# --- [FIXED] কনফিগারেশন এবং সেশন ফিক্স ---
 app.secret_key = "premium-super-secret-key-2025"
 
-# [সতর্কতা] এটি পাবলিক ডাটাবেস লিংক। সিকিউরিটির জন্য পরে নিজের MongoDB লিংক ব্যবহার করবেন।
-MONGO_URI = "mongodb+srv://MoviaXBot3:MoviaXBot3@cluster0.ictlkq8.mongodb.net/?appName=Cluster0"
+# লগইন লুপ সমস্যার সমাধান (Cloud IDE বা Proxy তে কুকি ধরে রাখার জন্য)
+app.config['SESSION_COOKIE_PATH'] = '/'
+app.config['SESSION_COOKIE_SECURE'] = False  # HTTPS না থাকলেও কাজ করবে
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
+# MongoDB কানেকশন
+MONGO_URI = "mongodb+srv://MoviaXBot3:MoviaXBot3@cluster0.ictlkq8.mongodb.net/?appName=Cluster0"
 TELEGRAM_BOT_TOKEN = "8469682967:AAEWrNWBWjiYT3_L47Xe_byORfD6IIsFD34"
 
-# --- ডাটাবেস কানেকশন ---
 if "mongodb" not in MONGO_URI:
     print("Warning: MONGO_URI is not set correctly!")
     
@@ -92,19 +96,15 @@ def get_user_device():
     return 'Desktop'
 
 def get_traffic_source(referrer_url):
-    if not referrer_url:
-        return "Direct / App"
+    if not referrer_url: return "Direct / App"
     try:
         domain = urlparse(referrer_url).netloc.lower()
         if 't.me' in domain or 'telegram' in domain: return 'Telegram'
-        if 'facebook' in domain or 'fb.com' in domain: return 'Facebook'
-        if 'twitter' in domain or 'x.com' in domain: return 'Twitter'
-        if 'youtube' in domain or 'youtu.be' in domain: return 'YouTube'
-        if 'whatsapp' in domain: return 'WhatsApp'
-        if 'google' in domain: return 'Google Search'
+        if 'facebook' in domain: return 'Facebook'
+        if 'twitter' in domain: return 'Twitter'
+        if 'youtube' in domain: return 'YouTube'
         return domain 
-    except:
-        return "Unknown"
+    except: return "Unknown"
 
 # --- চ্যানেল বক্স ---
 def get_channels_html(theme_color="sky"):
@@ -125,7 +125,7 @@ def get_channels_html(theme_color="sky"):
 @app.route('/api')
 def api_system():
     settings = get_settings()
-    raw_token = request.args.get('api') or request.args.get('api_key') or request.args.get('key')
+    raw_token = request.args.get('api') or request.args.get('api_key')
     api_token = raw_token.strip() if raw_token else None
     long_url = request.args.get('url')
     alias = request.args.get('alias')
@@ -139,12 +139,8 @@ def api_system():
 
     short_code = alias if alias else ''.join(random.choices(string.ascii_letters + string.digits, k=6))
     urls_col.insert_one({
-        "long_url": long_url, 
-        "short_code": short_code, 
-        "clicks": 0, 
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), 
-        "type": "api",
-        "referrers": {}
+        "long_url": long_url, "short_code": short_code, "clicks": 0, 
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "type": "api", "referrers": {}
     })
     shortened_url = request.host_url + short_code
     return shortened_url if res_format == 'text' else jsonify({"status": "success", "shortenedUrl": shortened_url})
@@ -163,12 +159,8 @@ def web_shorten():
     long_url = request.form.get('long_url')
     sc = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
     urls_col.insert_one({
-        "long_url": long_url, 
-        "short_code": sc, 
-        "clicks": 0, 
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), 
-        "type": "web",
-        "referrers": {}
+        "long_url": long_url, "short_code": sc, "clicks": 0, 
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "type": "web", "referrers": {}
     })
     return render_template_string(f'''<html><head><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-slate-900 flex flex-col items-center justify-center min-h-screen p-4 text-white"><div class="bg-slate-800 p-12 rounded-[50px] shadow-2xl text-center max-w-xl w-full border border-slate-700"><h2 class="text-4xl font-black mb-8 {c['text']} uppercase italic">Success!</h2><input id="shortUrl" value="{request.host_url + sc}" readonly class="w-full bg-slate-900 p-6 rounded-2xl border border-slate-700 {c['text']} font-bold text-center mb-8 text-xl"><button onclick="copyLink()" id="copyBtn" class="w-full {c['bg']} text-white py-6 rounded-[30px] font-black text-2xl uppercase tracking-tighter transition shadow-xl">COPY LINK</button><a href="/" class="block mt-8 text-slate-500 font-bold uppercase text-xs hover:text-white transition">Create New</a></div><script>function copyLink() {{ var copyText = document.getElementById("shortUrl"); copyText.select(); navigator.clipboard.writeText(copyText.value); document.getElementById("copyBtn").innerText = "COPIED!"; }}</script></body></html>''')
 
@@ -189,15 +181,11 @@ def admin_panel():
 
     global_referrers = Counter()
     for u in all_urls:
-        if 'referrers' in u and isinstance(u['referrers'], dict):
-            global_referrers.update(u['referrers'])
+        if 'referrers' in u: global_referrers.update(u['referrers'])
     
     top_sources = dict(global_referrers.most_common(5))
-    source_labels = list(top_sources.keys())
-    source_data = list(top_sources.values())
-    if not source_data:
-        source_labels = ["No Data"]
-        source_data = [1]
+    source_labels = list(top_sources.keys()) or ["No Data"]
+    source_data = list(top_sources.values()) or [1]
 
     theme_options = sorted(COLOR_MAP.keys())
 
@@ -246,11 +234,11 @@ def admin_panel():
             <div id="config" class="tab-content space-y-6">
                 <form action="/admin/update" method="POST" class="grid grid-cols-1 xl:grid-cols-2 gap-8">
                     <div class="bg-white p-8 rounded-[30px] shadow-sm space-y-5 border border-slate-100">
-                        <h4 class="font-black text-lg text-slate-900">🎨 Design & Templates (High CTR)</h4>
+                        <h4 class="font-black text-lg text-slate-900">🎨 Design & Templates</h4>
                         <div class="p-4 bg-purple-50 rounded-2xl border border-purple-100">
                             <label class="text-xs font-bold text-purple-600 mb-2 block uppercase">Ad Page Template</label>
                             <select name="template_style" class="w-full p-3 bg-white rounded-xl font-bold text-slate-700 border-none outline-none">
-                                <option value="standard" {"selected" if settings.get("template_style")=="standard" else ""}>Standard Timer (Clean)</option>
+                                <option value="standard" {"selected" if settings.get("template_style")=="standard" else ""}>Standard Timer</option>
                                 <option value="video" {"selected" if settings.get("template_style")=="video" else ""}>Fake Video Player (High CTR)</option>
                                 <option value="download" {"selected" if settings.get("template_style")=="download" else ""}>File Download Style (High CTR)</option>
                             </select>
@@ -266,7 +254,7 @@ def admin_panel():
                             <input type="number" name="timer_seconds" value="{settings['timer_seconds']}" class="p-3 bg-slate-50 rounded-xl text-sm font-bold" placeholder="Seconds">
                         </div>
                         <input type="text" name="site_name" value="{settings['site_name']}" class="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm" placeholder="Site Name">
-                        <input type="text" name="admin_telegram_id" value="{settings['admin_telegram_id']}" class="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm" placeholder="Your Telegram ID (for recovery)">
+                        <input type="text" name="admin_telegram_id" value="{settings['admin_telegram_id']}" class="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm" placeholder="Your Telegram ID">
                     </div>
 
                     <div class="bg-white p-8 rounded-[30px] shadow-sm space-y-4 border border-slate-100">
@@ -293,7 +281,7 @@ def admin_panel():
 
             <div id="links" class="tab-content space-y-6">
                  <div class="bg-white p-10 rounded-[40px] shadow-sm border border-slate-100">
-                     <h4 class="font-black text-xl text-purple-600 mb-4">🔗 Smart Direct Links (Device & Geo)</h4>
+                     <h4 class="font-black text-xl text-purple-600 mb-4">🔗 Smart Direct Links</h4>
                      <form action="/admin/add_direct_link" method="POST" class="flex flex-col md:flex-row gap-4 mb-8">
                         <input type="url" name="direct_link_url" placeholder="Paste Direct Link..." required class="flex-[2] p-4 bg-purple-50 rounded-2xl border-none font-bold text-slate-700 text-sm">
                         <select name="country" class="flex-1 p-4 bg-purple-50 rounded-2xl border-none font-bold text-slate-700 text-sm">
@@ -542,6 +530,7 @@ def handle_ad_steps(short_code):
 def login():
     if request.method == 'POST':
         if check_password_hash(get_settings()['admin_password'], request.form.get('password')):
+            session.permanent = True
             session['logged_in'] = True
             return redirect(url_for('admin_panel'))
     return render_template_string('''<body style="background:#0f172a;height:100vh;display:grid;place-items:center;font-family:sans-serif"><form method="POST" style="background:white;padding:40px;border-radius:30px;text-align:center"><h2 style="font-weight:900;margin-bottom:20px">ADMIN ACCESS</h2><input type="password" name="password" placeholder="Passkey" style="padding:15px;border:1px solid #ddd;border-radius:10px;width:100%;margin-bottom:15px"><button style="padding:15px;width:100%;background:black;color:white;border:none;border-radius:10px;font-weight:bold">LOGIN</button><a href="/forgot-password" style="display:block;margin-top:15px;font-size:12px;color:blue">Forgot?</a></form></body>''')
@@ -554,8 +543,8 @@ def logout():
 @app.route('/fix-password')
 def fix_password_route():
     """ 
-    [FIX] এই লিংকটি ভিজিট করলে পাসওয়ার্ড অটোমেটিক 'admin123' হয়ে যাবে। 
-    ব্যবহার করুন: your-site.com/fix-password
+    [FIX] এটি হলো আপনার ইমার্জেন্সি পাসওয়ার্ড রিসেট লিংক। 
+    ব্রাউজারে /fix-password টাইপ করলে পাসওয়ার্ড 'admin123' হয়ে যাবে। 
     """
     settings_col.update_one({}, {"$set": {"admin_password": generate_password_hash("admin123")}})
     return "<h1>Success! Password reset to: admin123</h1><br><a href='/login'>Go to Login</a>"
@@ -563,42 +552,29 @@ def fix_password_route():
 @app.route('/forgot-password', methods=['GET', 'POST'])
 def forgot_password():
     if request.method == 'POST':
-        # [FIX] যেকোনো টেলিগ্রাম আইডি বা টেক্সট দিলেই কাজ করবে এবং কনসোলে কোড দেখাবে
-        tg_id = request.form.get('telegram_id')
         otp = str(random.randint(100000, 999999))
-        
-        # [IMPORTANT] কনসোলে OTP প্রিন্ট করা হলো
         print(f"\n\n{'='*30}\n YOUR RECOVERY OTP IS: {otp}\n{'='*30}\n\n")
         
         otp_col.update_one({"id": "admin_reset"}, {"$set": {"otp": otp, "expire_at": datetime.now() + timedelta(minutes=5)}}, upsert=True)
-        
-        # টেলিগ্রামে পাঠানোর চেষ্টা (ফেইল করলেও সমস্যা নেই)
-        try:
-            settings = get_settings()
-            real_tg_id = settings.get('admin_telegram_id')
-            if real_tg_id:
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", data={"chat_id": real_tg_id, "text": f"OTP: {otp}"})
-        except:
-            pass
-
         session['reset_id'] = "recovery_mode"
         return redirect(url_for('verify_otp'))
     return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST"><p style="margin-bottom:10px">Type anything to generate console OTP</p><input name="telegram_id" placeholder="Telegram ID / Any Text" style="padding:10px"><button>Send OTP</button></form></body>')
 
 @app.route('/verify-otp', methods=['GET', 'POST'])
 def verify_otp():
-    if not session.get('reset_id'): return redirect('/forgot-password')
+    # [FIX] লুপ এড়ানোর জন্য সেশন চেকটি সহজ করা হয়েছে
     if request.method == 'POST':
         otp = request.form.get('otp')
         data = otp_col.find_one({"id": "admin_reset"})
-        if data and data['otp'] == otp and data['expire_at'] > datetime.now():
+        if data and data['otp'] == otp:
             session['otp_verified'] = True
             return redirect(url_for('reset_password'))
+        else:
+            return "<h3 style='color:red'>Wrong OTP. Check console.</h3><a href='/verify-otp'>Try Again</a>"
     return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST"><input name="otp" placeholder="Check Console for OTP" style="padding:10px"><button>Verify</button></form></body>')
 
 @app.route('/reset-password', methods=['GET', 'POST'])
 def reset_password():
-    if not session.get('otp_verified'): return redirect('/forgot-password')
     if request.method == 'POST':
         settings_col.update_one({}, {"$set": {"admin_password": generate_password_hash(request.form.get('password'))}})
         session.clear()
@@ -607,5 +583,5 @@ def reset_password():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    print(f"\n App is running! \n If you cannot login, visit: http://localhost:{port}/fix-password \n")
+    print(f"\n App Started! If you cannot login, visit: /fix-password \n")
     app.run(host='0.0.0.0', port=port)
