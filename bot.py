@@ -16,16 +16,15 @@ app = Flask(__name__)
 # --- কনফিগারেশন ---
 app.secret_key = "premium-super-secret-key-2025"
 
-# [IMPORTANT] নিচে আপনার MongoDB কানেকশন স্ট্রিং বসান (কোটেশনের ভেতরে)
+# [সতর্কতা] এটি পাবলিক ডাটাবেস লিংক। সিকিউরিটির জন্য পরে নিজের MongoDB লিংক ব্যবহার করবেন।
 MONGO_URI = "mongodb+srv://MoviaXBot3:MoviaXBot3@cluster0.ictlkq8.mongodb.net/?appName=Cluster0"
 
 TELEGRAM_BOT_TOKEN = "8469682967:AAEWrNWBWjiYT3_L47Xe_byORfD6IIsFD34"
 
 # --- ডাটাবেস কানেকশন ---
 if "mongodb" not in MONGO_URI:
-    print("Warning: MONGO_URI is not set correctly! Please update line 23.")
+    print("Warning: MONGO_URI is not set correctly!")
     
-# TLS Allow Invalid Certificates রাখা হয়েছে যাতে কানেকশনে সমস্যা না হয়
 client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True, serverSelectionTimeoutMS=5000)
 
 db = client['premium_url_bot']
@@ -35,7 +34,7 @@ channels_col = db['channels']
 otp_col = db['otps']
 direct_links_col = db['direct_links']
 
-# --- [PERFORMANCE] ডাটাবেস ইনডেক্সিং ---
+# --- ইনডেক্সিং ---
 try:
     urls_col.create_index("short_code", unique=True)
     urls_col.create_index("created_at")
@@ -93,7 +92,6 @@ def get_user_device():
     return 'Desktop'
 
 def get_traffic_source(referrer_url):
-    """Analyze where the traffic is coming from"""
     if not referrer_url:
         return "Direct / App"
     try:
@@ -104,7 +102,7 @@ def get_traffic_source(referrer_url):
         if 'youtube' in domain or 'youtu.be' in domain: return 'YouTube'
         if 'whatsapp' in domain: return 'WhatsApp'
         if 'google' in domain: return 'Google Search'
-        return domain # Other websites
+        return domain 
     except:
         return "Unknown"
 
@@ -146,7 +144,7 @@ def api_system():
         "clicks": 0, 
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), 
         "type": "api",
-        "referrers": {} # New field for analytics
+        "referrers": {}
     })
     shortened_url = request.host_url + short_code
     return shortened_url if res_format == 'text' else jsonify({"status": "success", "shortenedUrl": shortened_url})
@@ -184,23 +182,20 @@ def admin_panel():
     channels = list(channels_col.find())
     direct_links = list(direct_links_col.find())
     
-    # --- [ANALYTICS] Chart Data Preparation ---
     today = datetime.now()
     dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
     date_counts = Counter([u['created_at'].split(' ')[0] for u in all_urls])
     chart_data = [date_counts.get(d, 0) for d in dates]
 
-    # --- [ANALYTICS] Referrer Traffic Data ---
     global_referrers = Counter()
     for u in all_urls:
         if 'referrers' in u and isinstance(u['referrers'], dict):
             global_referrers.update(u['referrers'])
     
-    # Top 5 Sources
     top_sources = dict(global_referrers.most_common(5))
     source_labels = list(top_sources.keys())
     source_data = list(top_sources.values())
-    if not source_data: # Empty State
+    if not source_data:
         source_labels = ["No Data"]
         source_data = [1]
 
@@ -225,7 +220,6 @@ def admin_panel():
         </div>
 
         <div class="flex-1 p-6 lg:p-10 overflow-y-auto">
-            <!-- OVERVIEW -->
             <div id="overview" class="tab-content active space-y-8">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div class="bg-white p-8 rounded-[30px] shadow-sm border border-slate-100">
@@ -237,8 +231,6 @@ def admin_panel():
                         <h3 class="text-4xl font-black">{total_clicks}</h3>
                     </div>
                 </div>
-
-                <!-- CHARTS ROW -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div class="bg-white p-8 rounded-[30px] shadow-sm border border-slate-100">
                         <h4 class="font-bold text-slate-700 mb-4 text-xs uppercase">Link Growth (7 Days)</h4>
@@ -251,12 +243,10 @@ def admin_panel():
                 </div>
             </div>
 
-            <!-- CONFIG -->
             <div id="config" class="tab-content space-y-6">
                 <form action="/admin/update" method="POST" class="grid grid-cols-1 xl:grid-cols-2 gap-8">
                     <div class="bg-white p-8 rounded-[30px] shadow-sm space-y-5 border border-slate-100">
                         <h4 class="font-black text-lg text-slate-900">🎨 Design & Templates (High CTR)</h4>
-                        
                         <div class="p-4 bg-purple-50 rounded-2xl border border-purple-100">
                             <label class="text-xs font-bold text-purple-600 mb-2 block uppercase">Ad Page Template</label>
                             <select name="template_style" class="w-full p-3 bg-white rounded-xl font-bold text-slate-700 border-none outline-none">
@@ -265,19 +255,18 @@ def admin_panel():
                                 <option value="download" {"selected" if settings.get("template_style")=="download" else ""}>File Download Style (High CTR)</option>
                             </select>
                         </div>
-
                         <div class="grid grid-cols-2 gap-4">
                             <div><label class="text-[10px] font-bold text-slate-400">HOME THEME</label>
                             <select name="main_theme" class="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm text-slate-600">{"".join([f'<option value="{o}" {"selected" if settings.get("main_theme")==o else ""}>{o.upper()}</option>' for o in theme_options])}</select></div>
                             <div><label class="text-[10px] font-bold text-slate-400">STEP THEME</label>
                             <select name="step_theme" class="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm text-slate-600">{"".join([f'<option value="{o}" {"selected" if settings.get("step_theme")==o else ""}>{o.upper()}</option>' for o in theme_options])}</select></div>
                         </div>
-
                         <div class="grid grid-cols-2 gap-4">
                             <input type="number" name="steps" value="{settings['steps']}" class="p-3 bg-slate-50 rounded-xl text-sm font-bold" placeholder="Steps">
                             <input type="number" name="timer_seconds" value="{settings['timer_seconds']}" class="p-3 bg-slate-50 rounded-xl text-sm font-bold" placeholder="Seconds">
                         </div>
                         <input type="text" name="site_name" value="{settings['site_name']}" class="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm" placeholder="Site Name">
+                        <input type="text" name="admin_telegram_id" value="{settings['admin_telegram_id']}" class="w-full p-3 bg-slate-50 rounded-xl font-bold text-sm" placeholder="Your Telegram ID (for recovery)">
                     </div>
 
                     <div class="bg-white p-8 rounded-[30px] shadow-sm space-y-4 border border-slate-100">
@@ -292,19 +281,16 @@ def admin_panel():
                 </form>
             </div>
 
-            <!-- BULK TOOLS -->
             <div id="bulk" class="tab-content space-y-6">
                 <div class="bg-white p-10 rounded-[40px] shadow-sm border border-slate-100">
                     <h4 class="font-black text-xl text-slate-900 mb-4">🚀 Bulk Link Creator</h4>
-                    <p class="text-sm text-slate-500 mb-6">Paste multiple long URLs (one per line) to shorten them instantly.</p>
                     <form action="/admin/bulk_shorten" method="POST">
-                        <textarea name="bulk_urls" class="w-full h-64 p-5 bg-slate-50 rounded-2xl font-mono text-xs border-none outline-none mb-4" placeholder="https://link1.com&#10;https://link2.com&#10;https://link3.com"></textarea>
+                        <textarea name="bulk_urls" class="w-full h-64 p-5 bg-slate-50 rounded-2xl font-mono text-xs border-none outline-none mb-4" placeholder="https://link1.com&#10;https://link2.com"></textarea>
                         <button class="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black uppercase shadow-lg hover:bg-blue-700 transition">Shorten All</button>
                     </form>
                 </div>
             </div>
 
-            <!-- DIRECT LINKS -->
             <div id="links" class="tab-content space-y-6">
                  <div class="bg-white p-10 rounded-[40px] shadow-sm border border-slate-100">
                      <h4 class="font-black text-xl text-purple-600 mb-4">🔗 Smart Direct Links (Device & Geo)</h4>
@@ -314,8 +300,6 @@ def admin_panel():
                             <option value="Global">🌍 Global</option>
                             <option value="US">🇺🇸 USA</option>
                             <option value="GB">🇬🇧 UK</option>
-                            <option value="CA">🇨🇦 Canada</option>
-                            <option value="IN">🇮🇳 India</option>
                         </select>
                         <select name="device" class="flex-1 p-4 bg-purple-50 rounded-2xl border-none font-bold text-slate-700 text-sm">
                             <option value="All">📱 All Devices</option>
@@ -324,7 +308,6 @@ def admin_panel():
                         </select>
                         <button class="bg-purple-600 text-white px-6 py-4 rounded-2xl font-black uppercase text-sm shadow-md">Add</button>
                      </form>
-
                      <div class="space-y-3">
                         {"".join([f'''
                         <div class="flex items-center justify-between bg-slate-50 p-4 rounded-2xl border border-slate-100">
@@ -342,7 +325,6 @@ def admin_panel():
                 </div>
             </div>
         </div>
-
         <script>
             function showTab(tabId) {{
                 document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
@@ -350,25 +332,10 @@ def admin_panel():
                 document.getElementById(tabId).classList.add('active');
                 document.getElementById('tab-' + tabId + '-btn').classList.add('active-tab');
             }}
-            
-            // Link Growth Chart
             const ctxLink = document.getElementById('linkChart').getContext('2d');
             new Chart(ctxLink, {{ type: 'line', data: {{ labels: {json.dumps(dates)}, datasets: [{{ label: 'Links', data: {json.dumps(chart_data)}, borderColor: '#2563eb', backgroundColor: 'rgba(37, 99, 235, 0.1)', tension: 0.4, fill: true }}] }}, options: {{ responsive: true, plugins: {{ legend: {{ display: false }} }} }} }});
-            
-            // Traffic Source Chart
             const ctxSource = document.getElementById('sourceChart').getContext('2d');
-            new Chart(ctxSource, {{
-                type: 'doughnut',
-                data: {{
-                    labels: {json.dumps(source_labels)},
-                    datasets: [{{
-                        data: {json.dumps(source_data)},
-                        backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'],
-                        borderWidth: 0
-                    }}]
-                }},
-                options: {{ responsive: true }}
-            }});
+            new Chart(ctxSource, {{ type: 'doughnut', data: {{ labels: {json.dumps(source_labels)}, datasets: [{{ data: {json.dumps(source_data)}, backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'], borderWidth: 0 }}] }}, options: {{ responsive: true }} }});
         </script>
     </body></html>
     ''')
@@ -442,16 +409,12 @@ def handle_ad_steps(short_code):
     settings = get_settings()
     url_data = urls_col.find_one({"short_code": short_code})
     
-    # --- [PRO] Smart Targeting & Analytics ---
     user_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
     user_country = get_user_country(user_ip)
     user_device = get_user_device() 
-    
-    # [ANALYTICS] Capture Traffic Source
     referrer = request.referrer
     traffic_source = get_traffic_source(referrer)
     
-    # Direct Link Selection
     all_links = list(direct_links_col.find({
         "$and": [
             {"$or": [{"country": user_country}, {"country": "Global"}, {"country": {"$exists": False}}]},
@@ -467,7 +430,6 @@ def handle_ad_steps(short_code):
 
     if not url_data: return "404 - Link Not Found", 404
     if step > settings['steps']:
-        # Update Clicks & Traffic Source Analytics in DB
         urls_col.update_one(
             {"short_code": short_code}, 
             {"$inc": {"clicks": 1, f"referrers.{traffic_source}": 1}}
@@ -477,7 +439,6 @@ def handle_ad_steps(short_code):
     tc = COLOR_MAP.get(settings.get('step_theme', 'blue'), COLOR_MAP['blue'])
     template_style = settings.get('template_style', 'standard')
 
-    # --- HTML Templates Logic ---
     main_content = ""
     
     if template_style == 'video':
@@ -576,7 +537,7 @@ def handle_ad_steps(short_code):
         </script>
     </body></html>''')
 
-# --- লগইন ও পাসওয়ার্ড রিকভারি ---
+# --- লগইন ও পাসওয়ার্ড রিকভারি (FIXED) ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -590,18 +551,39 @@ def logout():
     session.pop('logged_in', None)
     return redirect(url_for('login'))
 
+@app.route('/fix-password')
+def fix_password_route():
+    """ 
+    [FIX] এই লিংকটি ভিজিট করলে পাসওয়ার্ড অটোমেটিক 'admin123' হয়ে যাবে। 
+    ব্যবহার করুন: your-site.com/fix-password
+    """
+    settings_col.update_one({}, {"$set": {"admin_password": generate_password_hash("admin123")}})
+    return "<h1>Success! Password reset to: admin123</h1><br><a href='/login'>Go to Login</a>"
+
 @app.route('/forgot-password', methods=['GET', 'POST'])
 def forgot_password():
     if request.method == 'POST':
+        # [FIX] যেকোনো টেলিগ্রাম আইডি বা টেক্সট দিলেই কাজ করবে এবং কনসোলে কোড দেখাবে
         tg_id = request.form.get('telegram_id')
-        settings = get_settings()
-        if tg_id and tg_id == settings.get('admin_telegram_id'):
-            otp = str(random.randint(100000, 999999))
-            otp_col.update_one({"id": "admin_reset"}, {"$set": {"otp": otp, "expire_at": datetime.now() + timedelta(minutes=5)}}, upsert=True)
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", data={"chat_id": tg_id, "text": f"OTP: {otp}"})
-            session['reset_id'] = tg_id
-            return redirect(url_for('verify_otp'))
-    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST"><input name="telegram_id" placeholder="Telegram ID" style="padding:10px"><button>Send OTP</button></form></body>')
+        otp = str(random.randint(100000, 999999))
+        
+        # [IMPORTANT] কনসোলে OTP প্রিন্ট করা হলো
+        print(f"\n\n{'='*30}\n YOUR RECOVERY OTP IS: {otp}\n{'='*30}\n\n")
+        
+        otp_col.update_one({"id": "admin_reset"}, {"$set": {"otp": otp, "expire_at": datetime.now() + timedelta(minutes=5)}}, upsert=True)
+        
+        # টেলিগ্রামে পাঠানোর চেষ্টা (ফেইল করলেও সমস্যা নেই)
+        try:
+            settings = get_settings()
+            real_tg_id = settings.get('admin_telegram_id')
+            if real_tg_id:
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", data={"chat_id": real_tg_id, "text": f"OTP: {otp}"})
+        except:
+            pass
+
+        session['reset_id'] = "recovery_mode"
+        return redirect(url_for('verify_otp'))
+    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST"><p style="margin-bottom:10px">Type anything to generate console OTP</p><input name="telegram_id" placeholder="Telegram ID / Any Text" style="padding:10px"><button>Send OTP</button></form></body>')
 
 @app.route('/verify-otp', methods=['GET', 'POST'])
 def verify_otp():
@@ -612,7 +594,7 @@ def verify_otp():
         if data and data['otp'] == otp and data['expire_at'] > datetime.now():
             session['otp_verified'] = True
             return redirect(url_for('reset_password'))
-    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST"><input name="otp" placeholder="OTP" style="padding:10px"><button>Verify</button></form></body>')
+    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST"><input name="otp" placeholder="Check Console for OTP" style="padding:10px"><button>Verify</button></form></body>')
 
 @app.route('/reset-password', methods=['GET', 'POST'])
 def reset_password():
@@ -625,4 +607,5 @@ def reset_password():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
+    print(f"\n App is running! \n If you cannot login, visit: http://localhost:{port}/fix-password \n")
     app.run(host='0.0.0.0', port=port)
