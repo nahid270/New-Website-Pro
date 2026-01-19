@@ -12,46 +12,29 @@ from datetime import datetime, timedelta
 from bson.objectid import ObjectId
 from collections import Counter
 
-# --- [CRITICAL CONFIG] আপনার সাব-ফোল্ডারের নাম ---
-# লগের তথ্য অনুযায়ী আপনার ফোল্ডারের নাম ঠিক করে দেওয়া হলো
+# --- [CONFIGURATION] ---
+# আপনার ওয়েবসাইটের সাব-ফোল্ডার পাথ (লগ থেকে নেওয়া)
 SITE_PREFIX = "/view/New-Website-Pro"
 
 app = Flask(__name__)
 
-# --- [MIDDLEWARE] পাথ ফিক্সার (যাতে লগইন লুপ না হয়) ---
-class ReverseProxied(object):
+# --- [MIDDLEWARE] পাথ ফিক্সার ---
+# এটি নিশ্চিত করে যে Flask সঠিক ফোল্ডার পাথ চিনে নিয়েছে
+class SubdirectoryFix(object):
     def __init__(self, app):
         self.app = app
-
     def __call__(self, environ, start_response):
-        script_name = environ.get('HTTP_X_SCRIPT_NAME', '')
-        if script_name:
-            environ['SCRIPT_NAME'] = script_name
-            path_info = environ['PATH_INFO']
-            if path_info.startswith(script_name):
-                environ['PATH_INFO'] = path_info[len(script_name):]
-
-        # যদি অটোমেটিক ডিটেকশন কাজ না করে, আমরা ম্যানুয়ালি ফিক্স করছি
-        # লগের রিকোয়েস্ট পাথ থেকে ফোল্ডার নেম ডিটেক্ট করা হচ্ছে
         path_info = environ.get('PATH_INFO', '')
         if path_info.startswith(SITE_PREFIX):
             environ['SCRIPT_NAME'] = SITE_PREFIX
             environ['PATH_INFO'] = path_info[len(SITE_PREFIX):]
-
-        scheme = environ.get('HTTP_X_SCHEME', '')
-        if scheme:
-            environ['wsgi.url_scheme'] = scheme
-            
         return self.app(environ, start_response)
 
-# অ্যাপে মিডলওয়্যার যুক্ত করা হলো
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
-app.wsgi_app = ReverseProxied(app.wsgi_app)
+app.wsgi_app = SubdirectoryFix(app.wsgi_app)
 
 app.secret_key = "premium-super-secret-key-2025"
-
-# --- সেশন কুকি সেটিংস (লুপ ফিক্স) ---
-app.config['SESSION_COOKIE_PATH'] = '/' 
+app.config['SESSION_COOKIE_PATH'] = '/'
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
@@ -72,6 +55,30 @@ channels_col = db['channels']
 otp_col = db['otps']
 direct_links_col = db['direct_links']
 
+# --- [HARD RESET] সেটিংস ক্লিনআপ ---
+# অ্যাপ রান হওয়ার সময় পুরানো সব সেটিংস ডিলিট করে নতুন পাসওয়ার্ড সেট করবে
+try:
+    # 1. পুরানো সব সেটিংস ডিলিট
+    settings_col.delete_many({}) 
+    
+    # 2. নতুন ফ্রেশ সেটিংস তৈরি (পাসওয়ার্ড: admin123)
+    default_settings = {
+        "site_name": "Premium URL Shortener",
+        "admin_telegram_id": "", 
+        "steps": 2,
+        "timer_seconds": 10,
+        "admin_password": generate_password_hash("admin123"), # <--- Fixed Password
+        "api_key": ''.join(random.choices(string.ascii_lowercase + string.digits, k=40)),
+        "popunder": "", "banner": "", "social_bar": "", "native": "",
+        "direct_click_limit": 1,
+        "main_theme": "sky", "step_theme": "blue",
+        "template_style": "standard"
+    }
+    settings_col.insert_one(default_settings)
+    print("\n[SUCCESS] Database Reset Complete! Password is now: admin123\n")
+except Exception as e:
+    print(f"Reset Error: {e}")
+
 # --- ইনডেক্সিং ---
 try:
     urls_col.create_index("short_code", unique=True)
@@ -89,23 +96,7 @@ COLOR_MAP = {
 }
 
 def get_settings():
-    settings = settings_col.find_one()
-    if not settings:
-        default_settings = {
-            "site_name": "Premium URL Shortener",
-            "admin_telegram_id": "", 
-            "steps": 2,
-            "timer_seconds": 10,
-            "admin_password": generate_password_hash("admin123"),
-            "api_key": ''.join(random.choices(string.ascii_lowercase + string.digits, k=40)),
-            "popunder": "", "banner": "", "social_bar": "", "native": "",
-            "direct_click_limit": 1,
-            "main_theme": "sky", "step_theme": "blue",
-            "template_style": "standard"
-        }
-        settings_col.insert_one(default_settings)
-        return default_settings
-    return settings
+    return settings_col.find_one()
 
 def is_logged_in():
     return session.get('logged_in')
@@ -359,20 +350,22 @@ def admin_panel():
     </body></html>
     ''')
 
-# --- [LOGIN] form action is intentionally empty to post to current URL ---
+# --- [LOGIN] (FIXED FOR PROXY & PATHS) ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        # এখানে কনসোলে প্রিন্ট করছি যাতে বুঝা যায় লগইন হিট হচ্ছে কি না
-        print(f"\n[LOGIN DEBUG] Login attempted with: {request.form.get('password')}")
+        # পাসওয়ার্ড চেক করা হচ্ছে
+        input_pass = request.form.get('password', '').strip()
+        settings = get_settings()
         
-        if check_password_hash(get_settings()['admin_password'], request.form.get('password')):
+        if check_password_hash(settings['admin_password'], input_pass):
             session['logged_in'] = True
-            print("[LOGIN DEBUG] Password Correct! Redirecting to Admin...")
-            return redirect(url_for('admin_panel'))
+            # [CRITICAL] url_for ব্যবহার করলে পাথ মিসম্যাচ হয়, তাই ম্যানুয়াল রিডাইরেক্ট
+            return redirect(f"{SITE_PREFIX}/admin")
         else:
-            print("[LOGIN DEBUG] Wrong Password")
+            return render_template_string('<body style="background:#0f172a;height:100vh;display:grid;place-items:center;color:white"><h1>WRONG PASSWORD</h1><a href="/login" style="color:red">Try Again</a></body>')
             
+    # অ্যাকশন ফাঁকা রাখা হয়েছে যাতে বর্তমান URL-এই পোস্ট হয়
     return render_template_string('''<body style="background:#0f172a;height:100vh;display:grid;place-items:center;font-family:sans-serif"><form method="POST" action="" style="background:white;padding:40px;border-radius:30px;text-align:center"><h2 style="font-weight:900;margin-bottom:20px">ADMIN ACCESS</h2><input type="password" name="password" placeholder="Passkey" style="padding:15px;border:1px solid #ddd;border-radius:10px;width:100%;margin-bottom:15px"><button style="padding:15px;width:100%;background:black;color:white;border:none;border-radius:10px;font-weight:bold">LOGIN</button></form></body>''')
 
 @app.route('/logout')
@@ -578,12 +571,5 @@ def handle_ad_steps(short_code):
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    
-    # [IMPORTANT] অটো রিসেট কোড
-    try:
-        settings_col.update_one({}, {"$set": {"admin_password": generate_password_hash("admin123")}})
-        print("\n[SUCCESS] Password Auto-Reset to: admin123")
-    except: pass
-    
     print(f"\n App Started! Login with: admin123 \n")
     app.run(host='0.0.0.0', port=port)
