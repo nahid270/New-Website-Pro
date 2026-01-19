@@ -15,8 +15,8 @@ app = Flask(__name__)
 # ⚙️ কনফিগারেশন এবং ডাটাবেস সেটআপ
 # ========================================================
 
-# ১. সিক্রেট কি (নিরাপত্তার জন্য)
-app.config['SECRET_KEY'] = 'super_secret_final_key_2026'
+# ১. সিকিউরিটি কি
+app.config['SECRET_KEY'] = 'super_final_secret_key_2026_pro'
 
 # ২. আপনার MongoDB লিংক (সরাসরি কোডে সেট করা)
 MONGO_URI = "mongodb+srv://MoviaXBot3:MoviaXBot3@cluster0.ictlkq8.mongodb.net/shortener_db?retryWrites=true&w=majority&appName=Cluster0"
@@ -33,7 +33,7 @@ except Exception as e:
     mongo = None
 
 # ========================================================
-# 🎨 সম্পূর্ণ HTML টেমপ্লেট (একদম বিস্তারিত)
+# 🎨 সম্পূর্ণ HTML টেমপ্লেট (বিস্তারিত ডিজাইন)
 # ========================================================
 
 # ১. বেইজ টেমপ্লেট (হেডার, ফুটার, স্টাইল)
@@ -398,11 +398,52 @@ def inject_conf():
     return dict(config=get_settings())
 
 # ========================================================
-# 🌐 রাউটস (ওয়েবসাইট)
+# 🔥 API হ্যান্ডলিং লজিক (কমন ফাংশন)
+# ========================================================
+
+def handle_api_request(key, url):
+    """এটিই সেই ফাংশন যা বটের রিকোয়েস্ট হ্যান্ডেল করে"""
+    if not mongo: return jsonify({'status': 'error', 'message': 'DB Failed'}), 500
+    
+    # API Key যাচাই
+    if not mongo.db.api_keys.find_one({'key': key}):
+        return jsonify({'status': 'error', 'message': 'Invalid API Key'}), 401
+
+    try:
+        code = generate_code()
+        mongo.db.links.insert_one({
+            'original_url': url,
+            'short_code': code,
+            'clicks': 0,
+            'created_at': datetime.utcnow()
+        })
+        
+        # বট যে ফরম্যাটে চায়
+        short_url = request.host_url + code
+        return jsonify({
+            'status': 'success',
+            'shortenedUrl': short_url,
+            'short_url': short_url,
+            'url': short_url
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# ========================================================
+# 🌐 রাউটস (ওয়েবসাইট + API একসাথে)
 # ========================================================
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    # ১. বটের রিকোয়েস্ট চেক করা (যদি ?api=... বা ?key=... থাকে)
+    api_key = request.args.get('api') or request.args.get('key')
+    long_url = request.args.get('url') or request.args.get('link')
+
+    # যদি বটের প্যারামিটার থাকে, তবে HTML না দেখিয়ে JSON দেখাবে
+    if api_key and long_url:
+        return handle_api_request(api_key, long_url)
+
+    # ২. সাধারণ ভিজিটরদের জন্য ওয়েবসাইট দেখানো
     short_url = None
     if request.method == 'POST':
         url = request.form.get('url')
@@ -419,6 +460,18 @@ def index():
             except Exception as e:
                 flash(f"Error: {str(e)}", "danger")
     return render_template_string(TEMPLATES['index'], short_url=short_url)
+
+# আলাদা /api রাউট (বট যদি স্পেসিফিকভাবে এখানে হিট করে)
+@app.route('/api', methods=['GET', 'POST'])
+def api_endpoint():
+    key = request.values.get('api') or request.values.get('key')
+    url = request.values.get('url') or request.values.get('link')
+    
+    if not key or not url:
+        return jsonify({'status': 'error', 'message': 'Missing API Key or URL'}), 400
+        
+    return handle_api_request(key, url)
+
 
 @app.route('/<short_code>')
 def redirect_logic(short_code):
@@ -439,60 +492,6 @@ def redirect_logic(short_code):
     # শেষ হলে রিডাইরেক্ট
     mongo.db.links.update_one({'_id': link['_id']}, {'$inc': {'clicks': 1}})
     return redirect(link['original_url'])
-
-# ========================================================
-# 🔥 UNIVERSAL API (বটের সমস্যার সমাধান)
-# ========================================================
-# এই অংশটি আপনার বটের সাথে মিল রেখে বানানো হয়েছে।
-# এখন বট /api তে রিকোয়েস্ট পাঠালেই কাজ করবে।
-
-@app.route('/api', methods=['GET', 'POST'])
-def api_universal():
-    """
-    যেকোনো বটের জন্য ইউনিভার্সাল API।
-    এটি 'key', 'api' এবং 'url', 'link' সব ধরনের প্যারামিটার গ্রহণ করে।
-    """
-    # ১. ডাটাবেস চেক
-    if not mongo: 
-        return jsonify({'status': 'error', 'message': 'Database Connection Failed'}), 500
-
-    # ২. প্যারামিটার নেওয়া (বট যা পাঠায়)
-    # কিছু বট 'key' পাঠায়, কিছু 'api' পাঠায়
-    key = request.values.get('key') or request.values.get('api')
-    
-    # কিছু বট 'url' পাঠায়, কিছু 'link' পাঠায়
-    url = request.values.get('url') or request.values.get('link')
-
-    # ৩. ভ্যালিডেশন
-    if not key or not url:
-        return jsonify({'status': 'error', 'message': 'Missing API Key or URL'}), 400
-
-    # ৪. API Key চেক
-    if not mongo.db.api_keys.find_one({'key': key}):
-        return jsonify({'status': 'error', 'message': 'Invalid API Key'}), 401
-
-    # ৫. লিংক শর্ট করা
-    try:
-        code = generate_code()
-        mongo.db.links.insert_one({
-            'original_url': url,
-            'short_code': code,
-            'clicks': 0,
-            'created_at': datetime.utcnow()
-        })
-
-        full_short_url = request.host_url + code
-        
-        # ৬. সব ধরনের বটের জন্য রেসপন্স
-        return jsonify({
-            'status': 'success',
-            'shortenedUrl': full_short_url, # স্মার্ট বটের জন্য
-            'short_url': full_short_url,    # সাধারণ বটের জন্য
-            'url': full_short_url           # অন্য বটের জন্য
-        })
-
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 # ========================================================
