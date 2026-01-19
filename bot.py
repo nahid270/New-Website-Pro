@@ -8,13 +8,13 @@ from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
 from bson.objectid import ObjectId
+from collections import Counter
 
 app = Flask(__name__)
 
 # --- কনফিগারেশন (Render Environment Variables থেকে নেবে) ---
-# যদি Render এ সেট না থাকে তবে ডিফল্ট ভ্যালু ব্যবহার করবে
 app.secret_key = os.environ.get("SECRET_KEY", "premium-super-secret-key-2025")
-MONGO_URI = os.environ.get("MONGO_URI") # Render এর Environment Variable এ অবশ্যই MONGO_URI দিতে হবে
+MONGO_URI = os.environ.get("MONGO_URI") 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8469682967:AAEWrNWBWjiYT3_L47Xe_byORfD6IIsFD34")
 
 # --- ডাটাবেস কানেকশন ---
@@ -28,6 +28,14 @@ settings_col = db['settings']
 channels_col = db['channels']
 otp_col = db['otps']
 direct_links_col = db['direct_links']
+
+# --- [UPDATE] ডাটাবেস ইনডেক্সিং (Speed Optimization) ---
+# এটি নিশ্চিত করবে হাজার হাজার লিংক থাকলেও সাইট ফাস্ট থাকবে
+try:
+    urls_col.create_index("short_code", unique=True)
+    urls_col.create_index("created_at")
+except Exception as e:
+    print(f"Index creation skipped/error: {e}")
 
 # --- থিম কালার ম্যাপ ---
 COLOR_MAP = {
@@ -62,6 +70,19 @@ def get_settings():
 
 def is_logged_in():
     return session.get('logged_in')
+
+# --- [UPDATE] Geo Location Helper ---
+def get_user_country(ip):
+    """ইউজারের আইপি থেকে দেশ বের করার ফাংশন"""
+    try:
+        if ip == '127.0.0.1': return "US" # Localhost Testing
+        response = requests.get(f"http://ip-api.com/json/{ip}", timeout=3)
+        data = response.json()
+        if data.get('status') == 'success':
+            return data.get("countryCode", "US")
+    except:
+        pass
+    return "Global"
 
 # --- চ্যানেল বক্স ---
 def get_channels_html(theme_color="sky"):
@@ -132,10 +153,18 @@ def admin_panel():
     # ডাইরেক্ট লিংক লোড করা
     direct_links = list(direct_links_col.find())
     
+    # --- [UPDATE] Analytics for Chart (Last 7 Days) ---
+    today = datetime.now()
+    dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
+    # তারিখ অনুযায়ী লিংক জেনারেশন কাউন্ট বের করা
+    date_counts = Counter([u['created_at'].split(' ')[0] for u in all_urls])
+    chart_data = [date_counts.get(d, 0) for d in dates]
+    
     theme_options = sorted(COLOR_MAP.keys())
 
     return render_template_string(f'''
     <html><head><script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script> <!-- Chart JS Added -->
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;700;800&display=swap" rel="stylesheet">
     <style> body {{ font-family: 'Plus Jakarta Sans', sans-serif; background: #f8fafc; }} .active-tab {{ background: #1e293b !important; color: white !important; }} .tab-content {{ display: none; }} .tab-content.active {{ display: block; }} </style>
     </head>
@@ -165,6 +194,13 @@ def admin_panel():
                         <h3 class="text-5xl font-black">{total_clicks}</h3>
                     </div>
                 </div>
+
+                <!-- [UPDATE] Chart Section -->
+                <div class="bg-white p-8 rounded-[40px] shadow-sm border border-slate-100">
+                    <h4 class="font-bold text-slate-700 mb-4 uppercase text-xs tracking-wider">Link Generation (Last 7 Days)</h4>
+                    <canvas id="linkChart" height="80"></canvas>
+                </div>
+
                 <div class="bg-white rounded-[40px] border border-slate-100 shadow-sm overflow-hidden">
                     <table class="w-full text-left">
                         <thead class="bg-slate-50 text-[10px] font-black uppercase text-slate-400 tracking-widest">
@@ -234,20 +270,34 @@ def admin_panel():
                     </div>
                 </form>
 
-                <!-- UNLIMITED DIRECT LINKS MANAGER -->
+                <!-- UNLIMITED DIRECT LINKS MANAGER WITH GEO -->
                 <div class="bg-white p-10 rounded-[50px] shadow-sm border border-slate-100 space-y-6">
-                     <h4 class="font-black text-xl text-purple-600">🔗 Unlimited Direct Links Manager</h4>
-                     <p class="text-sm text-slate-400">Add as many links as you want. They will be shown randomly (rotated) to users.</p>
+                     <h4 class="font-black text-xl text-purple-600">🔗 Smart Direct Links (Geo-Targeted)</h4>
+                     <p class="text-sm text-slate-400">Add links for specific countries (High CPM) or leave 'Global' for all.</p>
                      
-                     <form action="/admin/add_direct_link" method="POST" class="flex gap-4">
-                        <input type="url" name="direct_link_url" placeholder="Paste Direct Link Here (https://...)" required class="flex-1 p-4 bg-purple-50 rounded-2xl border-none font-bold text-slate-700">
-                        <button class="bg-purple-600 text-white px-8 py-4 rounded-2xl font-black uppercase shadow-lg hover:bg-purple-700 transition">ADD LINK</button>
+                     <!-- [UPDATE] Geo Input Added -->
+                     <form action="/admin/add_direct_link" method="POST" class="flex flex-col md:flex-row gap-4">
+                        <input type="url" name="direct_link_url" placeholder="Paste Direct Link Here..." required class="flex-[2] p-4 bg-purple-50 rounded-2xl border-none font-bold text-slate-700">
+                        <select name="country" class="flex-1 p-4 bg-purple-50 rounded-2xl border-none font-bold text-slate-700">
+                            <option value="Global">🌍 Global (Default)</option>
+                            <option value="US">🇺🇸 USA (Tier 1)</option>
+                            <option value="GB">🇬🇧 UK (Tier 1)</option>
+                            <option value="CA">🇨🇦 Canada (Tier 1)</option>
+                            <option value="AU">🇦🇺 Australia</option>
+                            <option value="DE">🇩🇪 Germany</option>
+                            <option value="IN">🇮🇳 India</option>
+                            <option value="BD">🇧🇩 Bangladesh</option>
+                        </select>
+                        <button class="bg-purple-600 text-white px-8 py-4 rounded-2xl font-black uppercase shadow-lg hover:bg-purple-700 transition">ADD</button>
                      </form>
 
                      <div class="space-y-3 mt-4">
                         {"".join([f'''
                         <div class="flex items-center justify-between bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                            <span class="text-xs font-mono text-slate-600 truncate flex-1 mr-4">{dl['url']}</span>
+                            <div class="flex flex-col overflow-hidden mr-4">
+                                <span class="text-xs font-mono text-slate-600 truncate">{dl['url']}</span>
+                                <span class="text-[10px] font-black uppercase text-purple-500 mt-1">Target: {dl.get('country', 'Global')}</span>
+                            </div>
                             <a href="/admin/delete_direct_link/{dl['_id']}" class="bg-red-100 text-red-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase hover:bg-red-200 transition">Remove</a>
                         </div>
                         ''' for dl in direct_links])}
@@ -304,17 +354,37 @@ def admin_panel():
                 }}
                 document.getElementById("api_key_field").value = newKey;
             }}
+            
+            // --- [UPDATE] Chart Integration ---
+            const ctx = document.getElementById('linkChart').getContext('2d');
+            new Chart(ctx, {{
+                type: 'line',
+                data: {{
+                    labels: {json.dumps(dates)},
+                    datasets: [{{
+                        label: 'Links Created',
+                        data: {json.dumps(chart_data)},
+                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }}]
+                }},
+                options: {{ responsive: true, plugins: {{ legend: {{ display: false }} }} }}
+            }});
         </script>
     </body></html>
     ''')
 
 # --- রাউটস ---
+# --- [UPDATE] Direct Link Route updated for Country ---
 @app.route('/admin/add_direct_link', methods=['POST'])
 def add_direct_link():
     if not is_logged_in(): return redirect(url_for('login'))
     url = request.form.get('direct_link_url')
+    country = request.form.get('country', 'Global') # Default to Global
     if url:
-        direct_links_col.insert_one({"url": url, "created_at": datetime.now()})
+        direct_links_col.insert_one({"url": url, "country": country, "created_at": datetime.now()})
     return redirect(url_for('admin_panel'))
 
 @app.route('/admin/delete_direct_link/<id>')
@@ -366,10 +436,34 @@ def handle_ad_steps(short_code):
     settings = get_settings()
     url_data = urls_col.find_one({"short_code": short_code})
     
-    # সব ডাইরেক্ট লিংক লোড এবং র‍্যান্ডম রোটেশন লজিক
-    all_links = list(direct_links_col.find())
-    link_list = [l['url'] for l in all_links]
+    # --- [UPDATE] Smart Geo-Targeting Logic ---
+    user_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
+    # যদি একাধিক আইপি থাকে তবে প্রথমটি নিন
+    if user_ip and ',' in user_ip: user_ip = user_ip.split(',')[0].strip()
     
+    user_country = get_user_country(user_ip)
+    
+    # প্রথমে ঐ দেশের লিংক খোঁজা, না পেলে 'Global'
+    # db.direct_links.find({"$or": [{"country": "US"}, {"country": "Global"}]})
+    all_links_cursor = direct_links_col.find({
+        "$or": [
+            {"country": user_country},
+            {"country": "Global"},
+            {"country": {"$exists": False}} # Old links compatibility
+        ]
+    })
+    
+    # Priority Sorting: Python এ নির্দিষ্ট দেশের লিংকগুলো আগে রাখা
+    all_links = list(all_links_cursor)
+    
+    # যদি দেশের লিংক থাকে, শুধু সেগুলোই দেখাবে। না থাকলে গ্লোবাল।
+    country_specific = [l['url'] for l in all_links if l.get('country') == user_country]
+    global_links = [l['url'] for l in all_links if l.get('country') in ['Global', None]]
+    
+    # যদি নির্দিষ্ট দেশের লিংক পাওয়া যায়, তবে সেগুলোই ব্যবহার হবে। অন্যথায় গ্লোবাল।
+    link_list = country_specific if country_specific else global_links
+    
+    # ব্যাকআপ: যদি কিছুই না থাকে
     if not link_list:
         link_list = ["https://google.com"]
         
@@ -381,9 +475,15 @@ def handle_ad_steps(short_code):
         return redirect(url_data['long_url'])
     
     tc = COLOR_MAP.get(settings.get('step_theme', 'blue'), COLOR_MAP['blue'])
+    
+    # --- [UPDATE] Anti-Adblock & Skeleton Script Inject ---
     return render_template_string(f'''
     <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><script src="https://cdn.tailwindcss.com"></script>
     {settings['popunder']} {settings['social_bar']}
+    <style>
+        .fade-in {{ animation: fadeIn 0.5s ease-in; }}
+        @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+    </style>
     </head>
     <body class="bg-slate-50 flex flex-col items-center p-6 min-h-screen">
         <div class="mb-6">{settings['banner']}</div>
@@ -393,17 +493,33 @@ def handle_ad_steps(short_code):
             
             <div id="timer_box" class="text-7xl md:text-8xl font-black {tc['text']} mb-8 {tc['light_bg']} w-40 h-40 md:w-48 md:h-48 flex items-center justify-center rounded-full mx-auto border-8 {tc['border']} italic shadow-inner">{settings['timer_seconds']}</div>
             
-            <button id="main_btn" onclick="handleClick()" class="hidden w-full {tc['bg']} text-white py-8 rounded-[40px] font-black text-3xl uppercase shadow-2xl transition hover:scale-105">Continue</button>
+            <button id="main_btn" onclick="handleClick()" class="hidden w-full {tc['bg']} text-white py-8 rounded-[40px] font-black text-3xl uppercase shadow-2xl transition hover:scale-105 fade-in">Continue</button>
         </div>
         <div class="mt-4">{settings['native']}</div>
         {get_channels_html(settings.get('step_theme', 'blue'))}
         
         <script>
+            // --- [UPDATE] Anti-AdBlocker Logic ---
+            async function detectAdBlock() {{
+                let adBlockEnabled = false;
+                const googleAdUrl = 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js';
+                try {{
+                    await fetch(new Request(googleAdUrl)).catch(_ => adBlockEnabled = true);
+                }} catch (e) {{
+                    adBlockEnabled = true;
+                }}
+                if (adBlockEnabled) {{
+                    // Uncomment below line to enable strict blocking
+                    // alert("Please Disable AdBlock to Continue!");
+                }}
+            }}
+            detectAdBlock();
+
             let timeLeft = {settings['timer_seconds']};
             let totalAdClicks = 0;
             let adLimit = {settings.get('direct_click_limit', 1)};
             
-            // Random Direct Links System
+            // Random Direct Links System (Geo Filtered)
             const directLinks = {js_link_array};
 
             const timerBox = document.getElementById('timer_box');
@@ -430,8 +546,13 @@ def handle_ad_steps(short_code):
 
             function handleClick() {{
                 if (totalAdClicks < adLimit) {{
-                    const randomLink = directLinks[Math.floor(Math.random() * directLinks.length)];
-                    window.open(randomLink, '_blank');
+                    // Safe Check if array is empty
+                    if(directLinks.length > 0) {{
+                        const randomLink = directLinks[Math.floor(Math.random() * directLinks.length)];
+                        window.open(randomLink, '_blank');
+                    }} else {{
+                        window.open("https://google.com", '_blank');
+                    }}
                     totalAdClicks++;
                     refreshBtnText();
                 }} else {{
@@ -491,6 +612,5 @@ def reset_password():
     return render_template_string('<body style="background:#0f172a; display:flex; justify-content:center; align-items:center; height:100vh; font-family:sans-serif;"><form method="POST" style="background:white; padding:40px; border-radius:30px; width:320px;"><h2 style="text-align:center; font-weight:900;">NEW PASSKEY</h2><input type="password" name="password" required placeholder="New Password" style="width:100%; padding:15px; border-radius:15px; border:1px solid #ddd; margin:20px 0;"><button style="width:100%; padding:15px; background:#1e293b; color:white; border:none; border-radius:15px; font-weight:bold;">UPDATE</button></form></body>')
 
 if __name__ == '__main__':
-    # Render/Local উভয় জায়গাতেই কাজ করবে
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
