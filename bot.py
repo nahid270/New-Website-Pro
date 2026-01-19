@@ -3,6 +3,7 @@ import random
 import string
 import json
 import requests
+from urllib.parse import urlparse
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify, session
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -59,7 +60,7 @@ def get_settings():
             "popunder": "", "banner": "", "social_bar": "", "native": "",
             "direct_click_limit": 1,
             "main_theme": "sky", "step_theme": "blue",
-            "template_style": "standard" # Options: standard, video, download
+            "template_style": "standard"
         }
         settings_col.insert_one(default_settings)
         return default_settings
@@ -68,7 +69,7 @@ def get_settings():
 def is_logged_in():
     return session.get('logged_in')
 
-# --- [UPDATE] Geo & Device Helper ---
+# --- [HELPER] Geo, Device & Referrer ---
 def get_user_country(ip):
     try:
         if ip == '127.0.0.1': return "US"
@@ -85,6 +86,22 @@ def get_user_device():
     if 'android' in ua or 'iphone' in ua or 'ipad' in ua or 'mobile' in ua:
         return 'Mobile'
     return 'Desktop'
+
+def get_traffic_source(referrer_url):
+    """Analyze where the traffic is coming from"""
+    if not referrer_url:
+        return "Direct / App"
+    try:
+        domain = urlparse(referrer_url).netloc.lower()
+        if 't.me' in domain or 'telegram' in domain: return 'Telegram'
+        if 'facebook' in domain or 'fb.com' in domain: return 'Facebook'
+        if 'twitter' in domain or 'x.com' in domain: return 'Twitter'
+        if 'youtube' in domain or 'youtu.be' in domain: return 'YouTube'
+        if 'whatsapp' in domain: return 'WhatsApp'
+        if 'google' in domain: return 'Google Search'
+        return domain # Other websites
+    except:
+        return "Unknown"
 
 # --- চ্যানেল বক্স ---
 def get_channels_html(theme_color="sky"):
@@ -118,7 +135,14 @@ def api_system():
         return jsonify({"status": "error", "message": "Missing URL"}) if res_format != 'text' else "Error: Missing URL"
 
     short_code = alias if alias else ''.join(random.choices(string.ascii_letters + string.digits, k=6))
-    urls_col.insert_one({"long_url": long_url, "short_code": short_code, "clicks": 0, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "type": "api"})
+    urls_col.insert_one({
+        "long_url": long_url, 
+        "short_code": short_code, 
+        "clicks": 0, 
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), 
+        "type": "api",
+        "referrers": {} # New field for analytics
+    })
     shortened_url = request.host_url + short_code
     return shortened_url if res_format == 'text' else jsonify({"status": "success", "shortenedUrl": shortened_url})
 
@@ -135,7 +159,14 @@ def web_shorten():
     c = COLOR_MAP.get(settings.get('main_theme', 'sky'), COLOR_MAP['sky'])
     long_url = request.form.get('long_url')
     sc = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
-    urls_col.insert_one({"long_url": long_url, "short_code": sc, "clicks": 0, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "type": "web"})
+    urls_col.insert_one({
+        "long_url": long_url, 
+        "short_code": sc, 
+        "clicks": 0, 
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), 
+        "type": "web",
+        "referrers": {}
+    })
     return render_template_string(f'''<html><head><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-slate-900 flex flex-col items-center justify-center min-h-screen p-4 text-white"><div class="bg-slate-800 p-12 rounded-[50px] shadow-2xl text-center max-w-xl w-full border border-slate-700"><h2 class="text-4xl font-black mb-8 {c['text']} uppercase italic">Success!</h2><input id="shortUrl" value="{request.host_url + sc}" readonly class="w-full bg-slate-900 p-6 rounded-2xl border border-slate-700 {c['text']} font-bold text-center mb-8 text-xl"><button onclick="copyLink()" id="copyBtn" class="w-full {c['bg']} text-white py-6 rounded-[30px] font-black text-2xl uppercase tracking-tighter transition shadow-xl">COPY LINK</button><a href="/" class="block mt-8 text-slate-500 font-bold uppercase text-xs hover:text-white transition">Create New</a></div><script>function copyLink() {{ var copyText = document.getElementById("shortUrl"); copyText.select(); navigator.clipboard.writeText(copyText.value); document.getElementById("copyBtn").innerText = "COPIED!"; }}</script></body></html>''')
 
 # --- এডমিন প্যানেল ---
@@ -148,11 +179,26 @@ def admin_panel():
     channels = list(channels_col.find())
     direct_links = list(direct_links_col.find())
     
-    # Analytics
+    # --- [ANALYTICS] Chart Data Preparation ---
     today = datetime.now()
     dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(6, -1, -1)]
     date_counts = Counter([u['created_at'].split(' ')[0] for u in all_urls])
     chart_data = [date_counts.get(d, 0) for d in dates]
+
+    # --- [ANALYTICS] Referrer Traffic Data ---
+    global_referrers = Counter()
+    for u in all_urls:
+        if 'referrers' in u and isinstance(u['referrers'], dict):
+            global_referrers.update(u['referrers'])
+    
+    # Top 5 Sources
+    top_sources = dict(global_referrers.most_common(5))
+    source_labels = list(top_sources.keys())
+    source_data = list(top_sources.values())
+    if not source_data: # Empty State
+        source_labels = ["No Data"]
+        source_data = [1]
+
     theme_options = sorted(COLOR_MAP.keys())
 
     return render_template_string(f'''
@@ -186,9 +232,17 @@ def admin_panel():
                         <h3 class="text-4xl font-black">{total_clicks}</h3>
                     </div>
                 </div>
-                <div class="bg-white p-8 rounded-[30px] shadow-sm border border-slate-100">
-                    <h4 class="font-bold text-slate-700 mb-4 text-xs uppercase">Growth (7 Days)</h4>
-                    <canvas id="linkChart" height="70"></canvas>
+
+                <!-- CHARTS ROW -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="bg-white p-8 rounded-[30px] shadow-sm border border-slate-100">
+                        <h4 class="font-bold text-slate-700 mb-4 text-xs uppercase">Link Growth (7 Days)</h4>
+                        <canvas id="linkChart" height="150"></canvas>
+                    </div>
+                    <div class="bg-white p-8 rounded-[30px] shadow-sm border border-slate-100">
+                        <h4 class="font-bold text-slate-700 mb-4 text-xs uppercase">Traffic Sources (Top 5)</h4>
+                        <canvas id="sourceChart" height="150"></canvas>
+                    </div>
                 </div>
             </div>
 
@@ -291,8 +345,25 @@ def admin_panel():
                 document.getElementById(tabId).classList.add('active');
                 document.getElementById('tab-' + tabId + '-btn').classList.add('active-tab');
             }}
-            const ctx = document.getElementById('linkChart').getContext('2d');
-            new Chart(ctx, {{ type: 'line', data: {{ labels: {json.dumps(dates)}, datasets: [{{ label: 'Links', data: {json.dumps(chart_data)}, borderColor: '#2563eb', backgroundColor: 'rgba(37, 99, 235, 0.1)', tension: 0.4, fill: true }}] }}, options: {{ responsive: true, plugins: {{ legend: {{ display: false }} }} }} }});
+            
+            // Link Growth Chart
+            const ctxLink = document.getElementById('linkChart').getContext('2d');
+            new Chart(ctxLink, {{ type: 'line', data: {{ labels: {json.dumps(dates)}, datasets: [{{ label: 'Links', data: {json.dumps(chart_data)}, borderColor: '#2563eb', backgroundColor: 'rgba(37, 99, 235, 0.1)', tension: 0.4, fill: true }}] }}, options: {{ responsive: true, plugins: {{ legend: {{ display: false }} }} }} }});
+            
+            // Traffic Source Chart
+            const ctxSource = document.getElementById('sourceChart').getContext('2d');
+            new Chart(ctxSource, {{
+                type: 'doughnut',
+                data: {{
+                    labels: {json.dumps(source_labels)},
+                    datasets: [{{
+                        data: {json.dumps(source_data)},
+                        backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'],
+                        borderWidth: 0
+                    }}]
+                }},
+                options: {{ responsive: true }}
+            }});
         </script>
     </body></html>
     ''')
@@ -304,7 +375,7 @@ def bulk_shorten():
     raw_text = request.form.get('bulk_urls', '')
     urls = [u.strip() for u in raw_text.split('\n') if u.strip()]
     if urls:
-        new_entries = [{"long_url": u, "short_code": ''.join(random.choices(string.ascii_letters + string.digits, k=6)), "clicks": 0, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "type": "bulk"} for u in urls]
+        new_entries = [{"long_url": u, "short_code": ''.join(random.choices(string.ascii_letters + string.digits, k=6)), "clicks": 0, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "type": "bulk", "referrers": {}} for u in urls]
         urls_col.insert_many(new_entries)
     return redirect(url_for('admin_panel'))
 
@@ -366,12 +437,16 @@ def handle_ad_steps(short_code):
     settings = get_settings()
     url_data = urls_col.find_one({"short_code": short_code})
     
-    # --- [PRO] Smart Targeting Logic (Geo + Device) ---
+    # --- [PRO] Smart Targeting & Analytics ---
     user_ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
     user_country = get_user_country(user_ip)
-    user_device = get_user_device() # Returns 'Mobile' or 'Desktop'
+    user_device = get_user_device() 
     
-    # Filter Direct Links matching BOTH Country & Device
+    # [ANALYTICS] Capture Traffic Source
+    referrer = request.referrer
+    traffic_source = get_traffic_source(referrer)
+    
+    # Direct Link Selection
     all_links = list(direct_links_col.find({
         "$and": [
             {"$or": [{"country": user_country}, {"country": "Global"}, {"country": {"$exists": False}}]},
@@ -379,16 +454,19 @@ def handle_ad_steps(short_code):
         ]
     }))
     
-    # Prioritize exact country matches
     targeted = [l['url'] for l in all_links if l.get('country') == user_country]
     link_list = targeted if targeted else [l['url'] for l in all_links]
-    if not link_list: link_list = ["https://google.com"] # Fallback
+    if not link_list: link_list = ["https://google.com"]
 
     js_link_array = json.dumps(link_list)
 
     if not url_data: return "404 - Link Not Found", 404
     if step > settings['steps']:
-        urls_col.update_one({"short_code": short_code}, {"$inc": {"clicks": 1}})
+        # Update Clicks & Traffic Source Analytics in DB
+        urls_col.update_one(
+            {"short_code": short_code}, 
+            {"$inc": {"clicks": 1, f"referrers.{traffic_source}": 1}}
+        )
         return redirect(url_data['long_url'])
     
     tc = COLOR_MAP.get(settings.get('step_theme', 'blue'), COLOR_MAP['blue'])
@@ -398,7 +476,6 @@ def handle_ad_steps(short_code):
     main_content = ""
     
     if template_style == 'video':
-        # Fake Video Player Template
         main_content = f'''
         <div class="bg-black rounded-3xl overflow-hidden shadow-2xl w-full max-w-lg mx-auto border border-gray-800 relative aspect-video flex items-center justify-center cursor-pointer group" id="action_area">
             <div class="absolute inset-0 bg-cover bg-center opacity-40" style="background-image: url('https://img.freepik.com/free-photo/blurred-motion-colors-abstract-art_23-2147853683.jpg');"></div>
@@ -415,9 +492,7 @@ def handle_ad_steps(short_code):
                  </button>
             </div>
         </div>'''
-        
     elif template_style == 'download':
-        # Fake Download Template
         main_content = f'''
         <div class="bg-white p-10 rounded-[40px] shadow-2xl text-center max-w-lg mx-auto border-4 {tc['border']}">
             <div class="bg-blue-50 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6 text-blue-500">
@@ -425,13 +500,10 @@ def handle_ad_steps(short_code):
             </div>
             <h2 class="text-2xl font-black text-slate-800 mb-2">Ready to Download</h2>
             <p class="text-slate-400 text-sm mb-8 font-mono">File Size: 145.2 MB • Scanned Secure</p>
-            
             <div id="timer_box" class="text-5xl font-black {tc['text']} mb-8">{settings['timer_seconds']}</div>
             <button id="main_btn" class="hidden w-full bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-2xl font-bold text-xl uppercase shadow-lg">Download Now</button>
         </div>'''
-        
     else:
-        # Standard Template
         main_content = f'''
         <div class="bg-white p-12 rounded-[50px] shadow-3xl text-center max-w-2xl w-full border-t-[12px] {tc['border']}">
             <p class="text-xl font-black {tc['text']} uppercase tracking-widest mb-4">Step {step} / {settings['steps']}</p>
@@ -440,23 +512,18 @@ def handle_ad_steps(short_code):
             <button id="main_btn" class="hidden w-full {tc['bg']} text-white py-6 rounded-[30px] font-black text-2xl uppercase shadow-xl transition hover:scale-105">Verify & Continue</button>
         </div>'''
 
-    # --- Final HTML Assembly ---
     return render_template_string(f'''
     <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="referrer" content="no-referrer"> <!-- Hides Referrer -->
+    <meta name="referrer" content="no-referrer">
     <script src="https://cdn.tailwindcss.com"></script>
     {settings['popunder']} {settings['social_bar']}
     </head>
     <body class="bg-slate-100 flex flex-col items-center p-4 min-h-screen">
         <div class="w-full max-w-3xl mb-4">{settings['banner']}</div>
-        
         {main_content}
-        
         <div class="mt-8 w-full max-w-3xl">{settings['native']}</div>
         {get_channels_html(settings.get('step_theme', 'blue'))}
-        
         <script>
-            // Anti-Adblock (Silent)
             async function checkAdBlock() {{ try {{ await fetch('https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js'); }} catch(e) {{ console.log("AdBlock Active"); }} }}
             checkAdBlock();
 
@@ -467,17 +534,17 @@ def handle_ad_steps(short_code):
 
             const timerBox = document.getElementById('timer_box');
             const mainBtn = document.getElementById('main_btn');
-            const timerOverlay = document.getElementById('timer_overlay'); // For Video Template
-            const btnOverlay = document.getElementById('btn_overlay'); // For Video Template
+            const timerOverlay = document.getElementById('timer_overlay');
+            const btnOverlay = document.getElementById('btn_overlay');
 
             const countdown = setInterval(() => {{
                 timeLeft--;
                 timerBox.innerText = timeLeft;
                 if(timeLeft <= 0) {{
                     clearInterval(countdown);
-                    if(timerOverlay) timerOverlay.style.display = 'none'; // Hide overlay for video
-                    if(btnOverlay) btnOverlay.classList.remove('hidden'); // Show btn overlay for video
-                    timerBox.style.display = 'none'; // Hide text timer for standard/download
+                    if(timerOverlay) timerOverlay.style.display = 'none';
+                    if(btnOverlay) btnOverlay.classList.remove('hidden');
+                    timerBox.style.display = 'none';
                     mainBtn.classList.remove('hidden');
                     refreshBtnText();
                 }}
@@ -485,11 +552,10 @@ def handle_ad_steps(short_code):
 
             function refreshBtnText() {{
                 let btnText = (totalAdClicks < adLimit) ? "UNLOCK CONTENT" : "CONTINUE";
-                if(document.getElementById('action_area')) return; // Don't change text for video template
+                if(document.getElementById('action_area')) return; 
                 mainBtn.innerText = btnText;
             }}
 
-            // Unified Click Handler
             document.addEventListener('click', function(e) {{
                 if(e.target && (e.target.id === 'main_btn' || e.target.closest('#main_btn'))) {{
                     if (totalAdClicks < adLimit) {{
