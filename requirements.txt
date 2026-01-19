@@ -3,3 +3,4 @@ Flask-PyMongo
 pymongo[srv]
 dnspython
 gunicorn
+certifi
