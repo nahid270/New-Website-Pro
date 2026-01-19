@@ -7,23 +7,23 @@ from urllib.parse import urlparse
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify, session
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.middleware.proxy_fix import ProxyFix  # [IMPORTANT] এটি নতুন যোগ করা হয়েছে
+from werkzeug.middleware.proxy_fix import ProxyFix
 from datetime import datetime, timedelta
 from bson.objectid import ObjectId
 from collections import Counter
 
 app = Flask(__name__)
 
-# --- [CRITICAL FIX] প্রক্সি এবং সেশন ফিক্স ---
-# এটি Replit বা Cloud Server-এ পাথ সমস্যা সমাধান করবে
+# --- [CRITICAL FIX] প্রক্সি এবং পাথ কনফিগারেশন ---
+# এটি ক্লাউড সার্ভারের (Replit/CodeSpace) পাথ সমস্যা সমাধান করবে
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 app.secret_key = "premium-super-secret-key-2025"
 
-# কুকি সেটিংস (লগইন লুপ বন্ধ করার জন্য)
+# কুকি সেটিংস (Login Loop ফিক্স)
 app.config['SESSION_COOKIE_PATH'] = '/'
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = False # HTTPS না থাকলেও কুকি কাজ করবে
+app.config['SESSION_COOKIE_SECURE'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
 # MongoDB কানেকশন
@@ -49,7 +49,6 @@ try:
 except Exception as e:
     print(f"Index setup skipped: {e}")
 
-# --- থিম কালার ম্যাপ ---
 COLOR_MAP = {
     "red": {"text": "text-red-500", "bg": "bg-red-600", "border": "border-red-500", "hover": "hover:bg-red-700", "light_bg": "bg-red-50"},
     "blue": {"text": "text-blue-500", "bg": "bg-blue-600", "border": "border-blue-500", "hover": "hover:bg-blue-700", "light_bg": "bg-blue-50"},
@@ -81,7 +80,6 @@ def get_settings():
 def is_logged_in():
     return session.get('logged_in')
 
-# --- [HELPER] Geo, Device & Referrer ---
 def get_user_country(ip):
     try:
         if ip == '127.0.0.1': return "US"
@@ -110,7 +108,6 @@ def get_traffic_source(referrer_url):
         return domain 
     except: return "Unknown"
 
-# --- চ্যানেল বক্স ---
 def get_channels_html(theme_color="sky"):
     channels = list(channels_col.find())
     if not channels: return ""
@@ -529,40 +526,31 @@ def handle_ad_steps(short_code):
         </script>
     </body></html>''')
 
-# --- লগইন ও পাসওয়ার্ড রিকভারি (FIXED) ---
+# --- [MODIFIED] লগইন (FIXED FORM ACTION) ---
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         if check_password_hash(get_settings()['admin_password'], request.form.get('password')):
             session['logged_in'] = True
             return redirect(url_for('admin_panel'))
-    return render_template_string('''<body style="background:#0f172a;height:100vh;display:grid;place-items:center;font-family:sans-serif"><form method="POST" style="background:white;padding:40px;border-radius:30px;text-align:center"><h2 style="font-weight:900;margin-bottom:20px">ADMIN ACCESS</h2><input type="password" name="password" placeholder="Passkey" style="padding:15px;border:1px solid #ddd;border-radius:10px;width:100%;margin-bottom:15px"><button style="padding:15px;width:100%;background:black;color:white;border:none;border-radius:10px;font-weight:bold">LOGIN</button><a href="/forgot-password" style="display:block;margin-top:15px;font-size:12px;color:blue">Forgot?</a></form></body>''')
+            
+    # [IMPORTANT] form action="" রাখা হয়েছে যাতে বর্তমান URL-এই পোস্ট হয়
+    return render_template_string('''<body style="background:#0f172a;height:100vh;display:grid;place-items:center;font-family:sans-serif"><form method="POST" action="" style="background:white;padding:40px;border-radius:30px;text-align:center"><h2 style="font-weight:900;margin-bottom:20px">ADMIN ACCESS</h2><input type="password" name="password" placeholder="Passkey" style="padding:15px;border:1px solid #ddd;border-radius:10px;width:100%;margin-bottom:15px"><button style="padding:15px;width:100%;background:black;color:white;border:none;border-radius:10px;font-weight:bold">LOGIN</button><a href="/forgot-password" style="display:block;margin-top:15px;font-size:12px;color:blue">Forgot?</a></form></body>''')
 
 @app.route('/logout')
 def logout():
     session.pop('logged_in', None)
     return redirect(url_for('login'))
 
-@app.route('/fix-password')
-@app.route('/fix-password/')
-def fix_password_route():
-    """ 
-    [FIX] পাসওয়ার্ড রিসেট লিংক। 
-    ব্রাউজারে /fix-password টাইপ করলে পাসওয়ার্ড 'admin123' হয়ে যাবে। 
-    """
-    settings_col.update_one({}, {"$set": {"admin_password": generate_password_hash("admin123")}})
-    return "<h1>Success! Password reset to: admin123</h1><br><a href='/login'>Go to Login</a>"
-
 @app.route('/forgot-password', methods=['GET', 'POST'])
 def forgot_password():
     if request.method == 'POST':
         otp = str(random.randint(100000, 999999))
         print(f"\n\n{'='*30}\n YOUR RECOVERY OTP IS: {otp}\n{'='*30}\n\n")
-        
         otp_col.update_one({"id": "admin_reset"}, {"$set": {"otp": otp, "expire_at": datetime.now() + timedelta(minutes=5)}}, upsert=True)
         session['reset_id'] = "recovery_mode"
         return redirect(url_for('verify_otp'))
-    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST"><p style="margin-bottom:10px">Type anything to generate console OTP</p><input name="telegram_id" placeholder="Telegram ID / Any Text" style="padding:10px"><button>Send OTP</button></form></body>')
+    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST" action=""><p style="margin-bottom:10px">Type anything to generate console OTP</p><input name="telegram_id" placeholder="Telegram ID / Any Text" style="padding:10px"><button>Send OTP</button></form></body>')
 
 @app.route('/verify-otp', methods=['GET', 'POST'])
 def verify_otp():
@@ -574,7 +562,7 @@ def verify_otp():
             return redirect(url_for('reset_password'))
         else:
             return "<h3 style='color:red'>Wrong OTP. Check console.</h3><a href='/verify-otp'>Try Again</a>"
-    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST"><input name="otp" placeholder="Check Console for OTP" style="padding:10px"><button>Verify</button></form></body>')
+    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST" action=""><input name="otp" placeholder="Check Console for OTP" style="padding:10px"><button>Verify</button></form></body>')
 
 @app.route('/reset-password', methods=['GET', 'POST'])
 def reset_password():
@@ -582,9 +570,18 @@ def reset_password():
         settings_col.update_one({}, {"$set": {"admin_password": generate_password_hash(request.form.get('password'))}})
         session.clear()
         return 'Done. <a href="/login">Login</a>'
-    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST"><input type="password" name="password" placeholder="New Password" style="padding:10px"><button>Update</button></form></body>')
+    return render_template_string('<body style="display:grid;place-items:center;height:100vh;font-family:sans-serif"><form method="POST" action=""><input type="password" name="password" placeholder="New Password" style="padding:10px"><button>Update</button></form></body>')
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    print(f"\n App Started! If you cannot login, visit: /fix-password \n")
+    
+    # [IMPORTANT] অটোমেটিক পাসওয়ার্ড রিসেট (যেহেতু আপনার Magic Link কাজ করছে না)
+    # অ্যাপ রান করলেই পাসওয়ার্ড admin123 হয়ে যাবে
+    try:
+        print("\n[INFO] Resetting Admin Password to: admin123")
+        settings_col.update_one({}, {"$set": {"admin_password": generate_password_hash("admin123")}})
+    except Exception as e:
+        print(f"Password reset failed: {e}")
+        
+    print(f"\n App Started! Login with: admin123 \n")
     app.run(host='0.0.0.0', port=port)
