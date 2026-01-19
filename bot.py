@@ -7,19 +7,23 @@ from urllib.parse import urlparse
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify, session
 from pymongo import MongoClient
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix  # [IMPORTANT] এটি নতুন যোগ করা হয়েছে
 from datetime import datetime, timedelta
 from bson.objectid import ObjectId
 from collections import Counter
 
 app = Flask(__name__)
 
-# --- [FIXED] কনফিগারেশন এবং সেশন ফিক্স ---
+# --- [CRITICAL FIX] প্রক্সি এবং সেশন ফিক্স ---
+# এটি Replit বা Cloud Server-এ পাথ সমস্যা সমাধান করবে
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
 app.secret_key = "premium-super-secret-key-2025"
 
-# লগইন লুপ সমস্যার সমাধান (Cloud IDE বা Proxy তে কুকি ধরে রাখার জন্য)
+# কুকি সেটিংস (লগইন লুপ বন্ধ করার জন্য)
 app.config['SESSION_COOKIE_PATH'] = '/'
-app.config['SESSION_COOKIE_SECURE'] = False  # HTTPS না থাকলেও কাজ করবে
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = False # HTTPS না থাকলেও কুকি কাজ করবে
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
 # MongoDB কানেকশন
@@ -530,7 +534,6 @@ def handle_ad_steps(short_code):
 def login():
     if request.method == 'POST':
         if check_password_hash(get_settings()['admin_password'], request.form.get('password')):
-            session.permanent = True
             session['logged_in'] = True
             return redirect(url_for('admin_panel'))
     return render_template_string('''<body style="background:#0f172a;height:100vh;display:grid;place-items:center;font-family:sans-serif"><form method="POST" style="background:white;padding:40px;border-radius:30px;text-align:center"><h2 style="font-weight:900;margin-bottom:20px">ADMIN ACCESS</h2><input type="password" name="password" placeholder="Passkey" style="padding:15px;border:1px solid #ddd;border-radius:10px;width:100%;margin-bottom:15px"><button style="padding:15px;width:100%;background:black;color:white;border:none;border-radius:10px;font-weight:bold">LOGIN</button><a href="/forgot-password" style="display:block;margin-top:15px;font-size:12px;color:blue">Forgot?</a></form></body>''')
@@ -541,9 +544,10 @@ def logout():
     return redirect(url_for('login'))
 
 @app.route('/fix-password')
+@app.route('/fix-password/')
 def fix_password_route():
     """ 
-    [FIX] এটি হলো আপনার ইমার্জেন্সি পাসওয়ার্ড রিসেট লিংক। 
+    [FIX] পাসওয়ার্ড রিসেট লিংক। 
     ব্রাউজারে /fix-password টাইপ করলে পাসওয়ার্ড 'admin123' হয়ে যাবে। 
     """
     settings_col.update_one({}, {"$set": {"admin_password": generate_password_hash("admin123")}})
@@ -562,7 +566,6 @@ def forgot_password():
 
 @app.route('/verify-otp', methods=['GET', 'POST'])
 def verify_otp():
-    # [FIX] লুপ এড়ানোর জন্য সেশন চেকটি সহজ করা হয়েছে
     if request.method == 'POST':
         otp = request.form.get('otp')
         data = otp_col.find_one({"id": "admin_reset"})
