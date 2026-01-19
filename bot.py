@@ -1,3 +1,4 @@
+import os
 from flask import Flask, request, redirect, url_for, flash, session, jsonify, render_template_string
 from flask_pymongo import PyMongo
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -5,15 +6,18 @@ from functools import wraps
 from datetime import datetime
 import string
 import random
+from jinja2 import DictLoader
 
 app = Flask(__name__)
 
 # ===============================
 # ⚙️ কনফিগারেশন (SETTINGS)
 # ===============================
-app.config['SECRET_KEY'] = 'my_secret_key_change_it'
-# আপনার MongoDB কানেকশন লিংক (লোকাল বা অ্যাটলাস)
-app.config["MONGO_URI"] = "mongodb+srv://MoviaXBot3:MoviaXBot3@cluster0.ictlkq8.mongodb.net/?appName=Cluster0"
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'my_secret_key_change_it')
+
+# ⚠️ গুরত্বপূর্ণ: Render এ ডিপ্লয় করার সময় নিচের লাইনটি পরিবর্তন করে আপনার MongoDB Atlas এর লিংক দিন
+# উদাহরণ: "mongodb+srv://<username>:<password>@cluster0.mongodb.net/mydb"
+app.config["MONGO_URI"] = os.environ.get('MONGO_URI', "mongodb+srv://MoviaXBot3:MoviaXBot3@cluster0.ictlkq8.mongodb.net/?appName=Cluster0")
 
 mongo = PyMongo(app)
 
@@ -21,7 +25,6 @@ mongo = PyMongo(app)
 # 🎨 HTML টেমপ্লেট (এক ফাইলের ভেতর)
 # ===============================
 
-# 1. BASE DESIGN (হেডার, ফুটার, স্টাইল)
 BASE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -88,7 +91,6 @@ BASE_HTML = """
 </html>
 """
 
-# 2. HOME PAGE HTML
 HOME_HTML = """
 {% extends "base" %}
 {% block content %}
@@ -119,7 +121,6 @@ HOME_HTML = """
 {% endblock %}
 """
 
-# 3. REDIRECT / TIMER PAGE HTML
 REDIRECT_HTML = """
 {% extends "base" %}
 {% block content %}
@@ -171,7 +172,6 @@ REDIRECT_HTML = """
 {% endblock %}
 """
 
-# 4. LOGIN HTML
 LOGIN_HTML = """
 {% extends "base" %}
 {% block content %}
@@ -196,7 +196,6 @@ LOGIN_HTML = """
 {% endblock %}
 """
 
-# 5. DASHBOARD HTML
 DASHBOARD_HTML = """
 {% extends "base" %}
 {% block content %}
@@ -323,13 +322,6 @@ DASHBOARD_HTML = """
 # 🛠️ HELPER & LOGIC
 # ===============================
 
-# এই ফাংশনটি আমাদের স্ট্রিং টেমপ্লেটগুলোকে ম্যানেজ করে
-@app.template_globals()
-def get_globals():
-    return {}
-
-# টেমপ্লেট লোডার (যাতে extends কাজ করে)
-# ছোট হ্যাক: আমরা টেমপ্লেটগুলোকে একটি ডিকশনারিতে রাখছি
 TEMPLATES = {
     'base': BASE_HTML,
     'index': HOME_HTML,
@@ -338,30 +330,28 @@ TEMPLATES = {
     'dashboard': DASHBOARD_HTML
 }
 
-# Flask এর রেন্ডার ফাংশন ওভাররাইড করার দরকার নেই, 
-# আমরা render_template_string ব্যবহার করব, কিন্তু extends এর জন্য একটু ট্রিক করতে হবে।
-# সহজ করার জন্য আমরা সরাসরি render_template_string ব্যবহার করছি এবং 'base' কে আলাদা ডিফাইন করছি না,
-# বরং Flask এর context এ টেমপ্লেটগুলো চিনে নেবে যদি আমরা loader ব্যবহার করি।
-# কিন্তু সিঙ্গেল ফাইলের জন্য সবচেয়ে সহজ উপায় হলো:
-
-from jinja2 import DictLoader
 app.jinja_loader = DictLoader(TEMPLATES)
 
 def get_settings():
     """ডাটাবেস থেকে সেটিংস আনে, না থাকলে তৈরি করে"""
-    settings = mongo.db.settings.find_one({'_id': 'site_config'})
-    if not settings:
-        default_settings = {
-            '_id': 'site_config',
-            'site_name': 'BotShortener',
-            'total_pages': 1,
-            'ad_header': '',
-            'ad_middle': '',
-            'ad_footer': ''
-        }
-        mongo.db.settings.insert_one(default_settings)
-        return default_settings
-    return settings
+    try:
+        settings = mongo.db.settings.find_one({'_id': 'site_config'})
+        if not settings:
+            default_settings = {
+                '_id': 'site_config',
+                'site_name': 'BotShortener',
+                'total_pages': 1,
+                'ad_header': '',
+                'ad_middle': '',
+                'ad_footer': ''
+            }
+            mongo.db.settings.insert_one(default_settings)
+            return default_settings
+        return settings
+    except Exception as e:
+        print(f"Database Error: {e}")
+        # ফলব্যাক যদি ডাটাবেস কানেক্ট না হয়
+        return {'site_name': 'Error DB', 'total_pages': 0}
 
 def login_required(f):
     @wraps(f)
@@ -428,8 +418,8 @@ def redirect_logic(short_code):
 
 @app.route('/admin/login', methods=['GET', 'POST'])
 def login():
-    # প্রথমবার অটো অ্যাডমিন তৈরি
-    if not mongo.db.users.find_one({'username': 'admin'}):
+    # প্রথমবার অটো অ্যাডমিন তৈরি চেক
+    if mongo.db.users.count_documents({'username': 'admin'}) == 0:
         mongo.db.users.insert_one({
             'username': 'admin',
             'password': generate_password_hash('123456')
@@ -516,4 +506,5 @@ def api_shorten():
     })
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Render বা লোকাল রান করার জন্য
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
