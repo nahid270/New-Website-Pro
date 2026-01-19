@@ -1,5 +1,5 @@
 Flask
-pymongo
-cloudinary
-requests
+Flask-PyMongo
+pymongo[srv]
 dnspython
+gunicorn
